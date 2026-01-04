@@ -1,0 +1,14 @@
+# CMake
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Visual Studio
+.vs/
+
+# Windows
+*.exe
+*.pdb
+*.obj
