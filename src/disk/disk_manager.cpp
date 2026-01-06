@@ -48,7 +48,7 @@ namespace cmse {
                     throw std::runtime_error("I/O error while reading page");
                 }
                 // If read fewer bytes than PAGE_SIZE, zero out the rest
-                int read_count = db_io_.gcount();
+                int read_count = static_cast<int>(db_io_.gcount());
                 if (read_count < PAGE_SIZE) {
                     std::memset(data + read_count, 0, PAGE_SIZE - read_count);
                 }
