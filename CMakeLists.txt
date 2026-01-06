@@ -8,10 +8,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ------------------------------------------------------------------------------
-# 1. Core Library (Main library containing your source code)
+# 1. Core Library
 # ------------------------------------------------------------------------------
-# List all .cpp and .h files here
-add_library(cmse_core SHARED
+# Using STATIC library to avoid Windows DLL export complexity
+add_library(cmse_core STATIC
     src/disk/disk_manager.cpp
     src/disk/disk_manager.h
     src/bufferpool/buffer_pool_manager.cpp
@@ -22,7 +22,6 @@ add_library(cmse_core SHARED
     src/common/types.h
 )
 
-# Include directories to make header inclusion easier
 target_include_directories(cmse_core PUBLIC src)
 
 # ------------------------------------------------------------------------------
@@ -30,11 +29,8 @@ target_include_directories(cmse_core PUBLIC src)
 # ------------------------------------------------------------------------------
 enable_testing()
 
-# Define the test executable
 add_executable(buffer_pool_test tests/buffer_pool_test.cpp)
 
-# Link the test to the core library
 target_link_libraries(buffer_pool_test PRIVATE cmse_core)
 
-# Register the test with CTest
 add_test(NAME BufferPoolTest COMMAND buffer_pool_test)
