@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
-#include <fstream>
 #include <mutex>
+#include <cstdio> // Use C-style I/O for better control
 #include "../common/types.h"
 
 namespace cmse {
@@ -10,6 +10,8 @@ namespace cmse {
         /**
          * DiskManager
          * Handles the actual reading and writing of pages to the disk file.
+         * * NOTE: We use C-style FILE* API (fopen, fwrite) instead of std::fstream
+         * to avoid platform-specific file locking issues on Windows during testing.
          */
         class DiskManager {
         public:
@@ -30,10 +32,11 @@ namespace cmse {
 
         private:
             std::string file_name_;
-            std::fstream db_io_;
+            FILE* db_file_ = nullptr; // Low-level file handle
+
             page_id_t next_page_id_ = 0;
             int num_flushes_ = 0;
-            std::mutex db_io_latch_; // Protects file operations
+            std::mutex db_io_latch_; // Protects concurrent file access
         };
 
     } // namespace disk
