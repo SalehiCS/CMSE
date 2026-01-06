@@ -42,7 +42,7 @@ namespace cmse {
                 std::memset(data, 0, PAGE_SIZE);
             }
             else {
-                db_io_.seekp(offset);
+                db_io_.seekg(offset);
                 db_io_.read(data, PAGE_SIZE);
                 if (db_io_.bad()) {
                     throw std::runtime_error("I/O error while reading page");
