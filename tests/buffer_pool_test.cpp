@@ -101,8 +101,11 @@ int main() {
         for (int i = 0; i < BUFFER_SIZE; i++) {
             cmse::page_id_t pid;
             auto* p = bpm->NewPage(pid);
-            // Write page ID into content for verification
-            std::sprintf(p->GetData(), "Page-%d", i);
+
+            // USE SAFE FUNCTION: std::snprintf instead of std::sprintf
+            // We limit the write to PAGE_SIZE to prevent buffer overflow.
+            std::snprintf(p->GetData(), cmse::PAGE_SIZE, "Page-%d", i);
+
             bpm->UnpinPage(pid, true);
         }
 
