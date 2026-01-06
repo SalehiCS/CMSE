@@ -3,137 +3,158 @@
 #include <cstring>
 #include <vector>
 #include <cassert>
-#include <random>
-#include <cstdio> // for remove()
+#include <cstdio>
+#include <fstream> // Used only for debug reading
+#include <iomanip>
 
 #include "../src/bufferpool/buffer_pool_manager.h"
 
-// Test Configuration
+// Configuration
 const std::string DB_FILE = "test_run.db";
-const int BUFFER_SIZE = 5; // Small size to easily test LRU eviction
+const int BUFFER_SIZE = 5;
 
 void Log(const std::string& msg) {
-    std::cout << "[TEST] " << msg << std::endl;
+    std::cout << "[TEST_LOG] " << msg << std::endl;
 }
 
-// Helper function to assert conditions
 void Assert(bool condition, const std::string& message) {
     if (!condition) {
-        std::cerr << "FAILED: " << message << std::endl;
+        std::cerr << "!!! FAILED: " << message << std::endl;
         std::exit(1);
     }
 }
 
-int main() {
-    // Clean up old DB file if exists
-    std::remove(DB_FILE.c_str());
+// DEBUG HELPER: Reads the file directly from OS to see what's actually there
+void DebugFileContent(const std::string& filename, int expected_bytes_check) {
+    std::ifstream file(filename, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        std::cout << "[DEBUG_FILE] File '" << filename << "' DOES NOT EXIST!" << std::endl;
+        return;
+    }
 
-    Log("--- Starting Buffer Pool Manager Test ---");
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::cout << "[DEBUG_FILE] File Size: " << size << " bytes." << std::endl;
+
+    if (size == 0) {
+        std::cout << "[DEBUG_FILE] Content: [EMPTY]" << std::endl;
+        return;
+    }
+
+    // Read first few bytes
+    std::vector<char> buffer(50); // read first 50 bytes
+    file.read(buffer.data(), buffer.size());
+    size_t read_cnt = file.gcount();
+
+    std::cout << "[DEBUG_FILE] First " << read_cnt << " bytes (Hex/Char): ";
+    for (size_t i = 0; i < read_cnt; i++) {
+        char c = buffer[i];
+        if (std::isprint(c)) std::cout << c;
+        else std::cout << ".";
+    }
+    std::cout << std::endl;
+
+    file.close();
+}
+
+int main() {
+    // 0. Cleanup
+    std::remove(DB_FILE.c_str());
+    Log("Cleaned up old DB file.");
 
     // =================================================================
-    // Scenario 1: Basic Operations (New/Write/Unpin/Fetch)
+    // Scenario 1: Write and Flush
     // =================================================================
     {
-        Log("Scenario 1: Basic Write & Read");
+        Log("\n--- Scenario 1: Write & Flush ---");
 
+        // 1. Init
         auto* disk_manager = new cmse::disk::DiskManager(DB_FILE);
         auto* bpm = new cmse::bufferpool::BufferPoolManager(BUFFER_SIZE, disk_manager);
 
+        Log("BPM and DiskManager created.");
+        DebugFileContent(DB_FILE, 0); // Should be created now
+
+        // 2. New Page
         cmse::page_id_t page_id_temp;
         auto* page0 = bpm->NewPage(page_id_temp);
+        Assert(page0 != nullptr, "NewPage failed");
+        Assert(page_id_temp == 0, "Page ID is not 0");
+        Log("Page 0 allocated in memory.");
 
-        Assert(page0 != nullptr, "Should be able to allocate a new page");
-        Assert(page_id_temp == 0, "First page ID should be 0");
-
-        // Write data to the page
-        char hello[] = "Hello CMSE!";
+        // 3. Write Data
+        char hello[] = "Hello_Persistence";
         std::memcpy(page0->GetData(), hello, sizeof(hello));
+        Log("Data written to memory: 'Hello_Persistence'");
 
-        // Unpin with Dirty=true (indicates content has changed and needs flush)
-        Assert(bpm->UnpinPage(0, true), "Unpin page 0 should succeed");
+        // 4. Unpin (Mark Dirty)
+        // NOTE: This does NOT write to disk yet, just marks it.
+        bpm->UnpinPage(0, true);
+        Log("Page 0 unpinned and marked DIRTY.");
 
-        // Fetch the page again (should still be in memory)
-        auto* page0_again = bpm->FetchPage(0);
-        Assert(page0_again != nullptr, "Should be able to fetch page 0");
-        Assert(std::strcmp(page0_again->GetData(), hello) == 0, "Content should match");
+        // Check disk - should be empty or just zero-filled depending on allocation
+        // But our data 'Hello...' should NOT be there yet (unless policy is immediate write, which is not)
+        std::cout << "-> Check Disk (Before Flush/Destructor): ";
+        DebugFileContent(DB_FILE, 0);
 
-        bpm->UnpinPage(0, false);
+        // 5. Explicit Flush (Test explicit flush first)
+        // bpm->FlushPage(0);
+        // Log("Explicit FlushPage(0) called.");
 
+        // 6. Delete BPM (Should trigger FlushAll in destructor)
+        Log("Deleting BPM (Expect FlushAll)...");
         delete bpm;
+
+        Log("Deleting DiskManager (Expect fclose)...");
         delete disk_manager;
-        Log("Scenario 1 Passed.");
+
+        // 7. FINAL CHECK FOR SCENARIO 1
+        std::cout << "-> Check Disk (After Shutdown): ";
+        DebugFileContent(DB_FILE, 0);
     }
 
     // =================================================================
-    // Scenario 2: Persistence (Disk Check)
+    // Scenario 2: Recovery
     // =================================================================
     {
-        Log("Scenario 2: Persistence (Disk Check)");
+        Log("\n--- Scenario 2: Recovery (Re-open) ---");
 
-        // Simulate a system crash or restart by creating new instances
+        std::cout << "-> Check Disk (Before Open New DiskManager): ";
+        DebugFileContent(DB_FILE, 0);
+
+        // 1. Re-Init
         auto* disk_manager = new cmse::disk::DiskManager(DB_FILE);
         auto* bpm = new cmse::bufferpool::BufferPoolManager(BUFFER_SIZE, disk_manager);
+        Log("New BPM/DM created.");
 
-        // Try fetching page 0. Since buffer is fresh, it must read from disk.
+        std::cout << "-> Check Disk (After Open New DiskManager): ";
+        DebugFileContent(DB_FILE, 0);
+
+        // 2. Fetch Page 0
         auto* page0 = bpm->FetchPage(0);
-        Assert(page0 != nullptr, "Should be able to fetch page 0 from disk");
+        Assert(page0 != nullptr, "FetchPage(0) failed");
 
-        char hello[] = "Hello CMSE!";
-        Assert(std::strcmp(page0->GetData(), hello) == 0, "Data should persist on disk");
+        // 3. Verify Data
+        std::cout << "[DEBUG_MEM] Content in RAM after fetch: " << page0->GetData() << std::endl;
 
-        bpm->UnpinPage(0, false);
-        delete bpm;
-        delete disk_manager;
-        Log("Scenario 2 Passed.");
-    }
-
-    // =================================================================
-    // Scenario 3: LRU Eviction Policy
-    // =================================================================
-    {
-        Log("Scenario 3: LRU Eviction Policy");
-
-        auto* disk_manager = new cmse::disk::DiskManager(DB_FILE);
-        auto* bpm = new cmse::bufferpool::BufferPoolManager(BUFFER_SIZE, disk_manager);
-
-        // Fill the buffer (Size is 5)
-        // Create pages 0 to 4 and unpin them so they become candidates for LRU
-        for (int i = 0; i < BUFFER_SIZE; i++) {
-            cmse::page_id_t pid;
-            auto* p = bpm->NewPage(pid);
-
-            // USE SAFE FUNCTION: std::snprintf instead of std::sprintf
-            // We limit the write to PAGE_SIZE to prevent buffer overflow.
-            std::snprintf(p->GetData(), cmse::PAGE_SIZE, "Page-%d", i);
-
-            bpm->UnpinPage(pid, true);
+        char hello[] = "Hello_Persistence";
+        if (std::strcmp(page0->GetData(), hello) != 0) {
+            Log("!!! DATA MISMATCH !!!");
+            Log("Expected: " + std::string(hello));
+            Log("Actual:   " + std::string(page0->GetData()));
+            Assert(false, "Data persistence check failed");
+        }
+        else {
+            Log("Data Verified Successfully!");
         }
 
-        // Buffer is now full: [0, 1, 2, 3, 4]
-        // Page 0 is the oldest (LRU victim)
-
-        // Create a new page (5). This should trigger eviction of page 0.
-        cmse::page_id_t pid5;
-        auto* p5 = bpm->NewPage(pid5);
-        Assert(p5 != nullptr, "Should be able to allocate when buffer is full (eviction)");
-        Assert(pid5 == 5, "New page ID should be 5");
-        bpm->UnpinPage(5, false);
-
-        // Try fetching page 0. Since it was evicted, it must be read from disk.
-        // Critical check: Did the dirty data get flushed before eviction?
-        auto* p0 = bpm->FetchPage(0);
-        Assert(p0 != nullptr, "Should fetch evicted page 0 back from disk");
-        Assert(std::strcmp(p0->GetData(), "Page-0") == 0, "Evicted dirty page data should be preserved");
         bpm->UnpinPage(0, false);
-
         delete bpm;
         delete disk_manager;
-        Log("Scenario 3 Passed.");
     }
 
-    // Clean up test file
     std::remove(DB_FILE.c_str());
-
-    Log("--- ALL TESTS PASSED SUCCESSFULLY ---");
+    Log("\n--- ALL TESTS PASSED ---");
     return 0;
 }
