@@ -1,39 +1,37 @@
 #pragma once
+
 #include <string>
-#include <fstream>
 #include <mutex>
+#include <cstdio> // FILE*, fopen_s, etc.
 #include "../common/types.h"
 
 namespace cmse {
     namespace disk {
 
         /**
-         * DiskManager
-         * Handles the actual reading and writing of pages to the disk file.
+         * DiskManager takes care of the allocation and deallocation of pages within a database.
+         * It performs the reading and writing of pages to and from disk.
          */
         class DiskManager {
         public:
             explicit DiskManager(const std::string& db_file);
             ~DiskManager();
 
-            // Reads a page from the database file
+            DiskManager(const DiskManager&) = delete;
+            DiskManager& operator=(const DiskManager&) = delete;
+
             void ReadPage(page_id_t page_id, char* data);
-
-            // Writes a page to the database file
             void WritePage(page_id_t page_id, const char* data);
-
-            // Allocates a new page ID (increments a counter)
             page_id_t AllocatePage();
-
-            // Returns total number of pages flushed to disk
             int GetNumFlushes() const;
 
         private:
             std::string file_name_;
-            std::fstream db_io_;
+            FILE* db_file_ = nullptr;
+
             page_id_t next_page_id_ = 0;
             int num_flushes_ = 0;
-            std::mutex db_io_latch_; // Protects file operations
+            std::mutex db_io_latch_;
         };
 
     } // namespace disk
