@@ -2,28 +2,26 @@
 #include <stdexcept>
 #include <iostream>
 #include <filesystem>
-#include <cstring> // for std::memset
+#include <cstring> 
 
 namespace cmse {
     namespace disk {
 
         DiskManager::DiskManager(const std::string& db_file) : file_name_(db_file) {
-            // 1. Try to open existing file in Read/Write mode
-            db_io_.open(file_name_, std::ios::binary | std::ios::in | std::ios::out);
+            // Use std::filesystem to check existence safely
+            bool file_exists = std::filesystem::exists(file_name_);
 
-            // 2. If file does not exist, create it
-            if (!db_io_.is_open()) {
-                db_io_.clear(); // Reset flags just in case
-                // Create new file with trunc (wipes content if exists, but here we know it doesn't)
+            if (!file_exists) {
+                // Only create/truncate if it genuinely doesn't exist
                 db_io_.open(file_name_, std::ios::binary | std::ios::trunc | std::ios::out);
                 db_io_.close();
+            }
 
-                // 3. Reopen in Read/Write mode
-                db_io_.open(file_name_, std::ios::binary | std::ios::in | std::ios::out);
+            // Open the file in Read/Write mode
+            db_io_.open(file_name_, std::ios::binary | std::ios::in | std::ios::out);
 
-                if (!db_io_.is_open()) {
-                    throw std::runtime_error("Failed to open database file: " + file_name_);
-                }
+            if (!db_io_.is_open()) {
+                throw std::runtime_error("Failed to open database file: " + file_name_);
             }
         }
 
@@ -37,32 +35,30 @@ namespace cmse {
             std::lock_guard<std::mutex> lock(db_io_latch_);
             size_t offset = static_cast<size_t>(page_id) * PAGE_SIZE;
 
-            // CRITICAL FIX: Always clear error flags (like EOF) before seeking.
-            // If we don't do this, seekg/tellg might fail silently.
+            // Always reset flags
             db_io_.clear();
 
-            // Check file size using the Read Pointer (seekg/tellg)
-            db_io_.seekg(0, std::ios::end);
-            size_t file_size = static_cast<size_t>(db_io_.tellg());
+            // Simplified Logic: Just try to seek and read.
+            // Don't manually check file size with seekg(end), it can be buggy during rapid IO.
+            db_io_.seekg(offset);
 
-            if (offset >= file_size) {
-                // Reading beyond file end -> return zeros
+            // If seek fails (e.g., past EOF), it sets failbit
+            if (db_io_.fail()) {
                 std::memset(data, 0, PAGE_SIZE);
+                return;
             }
-            else {
-                // Move pointer to the correct page
-                db_io_.seekg(offset);
-                db_io_.read(data, PAGE_SIZE);
 
-                if (db_io_.bad()) {
-                    throw std::runtime_error("I/O error while reading page");
-                }
+            db_io_.read(data, PAGE_SIZE);
 
-                // If we read partial page (end of file), zero out the rest
-                int read_count = static_cast<int>(db_io_.gcount());
-                if (read_count < PAGE_SIZE) {
-                    std::memset(data + read_count, 0, PAGE_SIZE - read_count);
-                }
+            // Handle partial reads or EOF during read
+            int read_count = static_cast<int>(db_io_.gcount());
+            if (read_count < PAGE_SIZE) {
+                std::memset(data + read_count, 0, PAGE_SIZE - read_count);
+            }
+
+            // If read completely failed (but seek worked), ensure data is zeroed
+            if (db_io_.bad()) {
+                throw std::runtime_error("I/O error while reading page");
             }
         }
 
@@ -70,10 +66,7 @@ namespace cmse {
             std::lock_guard<std::mutex> lock(db_io_latch_);
             size_t offset = static_cast<size_t>(page_id) * PAGE_SIZE;
 
-            // CRITICAL FIX: Clear flags before writing too
             db_io_.clear();
-
-            // Move Write Pointer
             db_io_.seekp(offset);
             db_io_.write(data, PAGE_SIZE);
 
@@ -81,7 +74,6 @@ namespace cmse {
                 throw std::runtime_error("I/O error while writing page");
             }
 
-            // Force write to disk immediately
             db_io_.flush();
             num_flushes_++;
         }
