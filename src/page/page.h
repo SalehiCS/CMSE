@@ -40,6 +40,9 @@ namespace cmse {
         // Convenience accessor for Page ID
         inline page_id_t GetPageId() { return GetHeader()->page_id; }
 
+        // --- NEW: Added Accessor for Testing ---
+        inline int GetPinCount() const { return pin_count_; }
+
         // Zeros out the page data
         void ResetMemory() { std::memset(data_, 0, PAGE_SIZE); }
 
