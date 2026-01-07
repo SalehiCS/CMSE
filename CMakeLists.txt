@@ -61,3 +61,8 @@ add_test(NAME PersistenceTest COMMAND persistence_test)
 add_executable(memory_edge_test tests/memory_edge_test.cpp)
 target_link_libraries(memory_edge_test PRIVATE cmse_core)
 add_test(NAME MemoryEdgeTest COMMAND memory_edge_test)
+
+# --- Fuzz Test ---
+add_executable(fuzz_test tests/fuzz_test.cpp)
+target_link_libraries(fuzz_test PRIVATE cmse_core)
+add_test(NAME FuzzTest COMMAND fuzz_test)
