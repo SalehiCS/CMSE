@@ -49,3 +49,9 @@ target_link_libraries(concurrency_test PRIVATE
 )
 
 add_test(NAME ConcurrencyTest COMMAND concurrency_test)
+
+
+# --- Persistence Test ---
+add_executable(persistence_test tests/persistence_test.cpp)
+target_link_libraries(persistence_test PRIVATE cmse_core)
+add_test(NAME PersistenceTest COMMAND persistence_test)
