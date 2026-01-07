@@ -55,3 +55,9 @@ add_test(NAME ConcurrencyTest COMMAND concurrency_test)
 add_executable(persistence_test tests/persistence_test.cpp)
 target_link_libraries(persistence_test PRIVATE cmse_core)
 add_test(NAME PersistenceTest COMMAND persistence_test)
+
+
+# --- Memory Edge Test ---
+add_executable(memory_edge_test tests/memory_edge_test.cpp)
+target_link_libraries(memory_edge_test PRIVATE cmse_core)
+add_test(NAME MemoryEdgeTest COMMAND memory_edge_test)
