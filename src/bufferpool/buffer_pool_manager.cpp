@@ -43,11 +43,13 @@ namespace cmse {
             // 2. Try to get a victim from LRU Replacer
             if (replacer_->Victim(frame_id)) {
                 // We found a victim frame.
-                // If the page in this victim frame is dirty, we MUST write it to disk.
                 Page* victim_page = &pages_[*frame_id];
 
+                // If the page in this victim frame is dirty, we MUST write it to disk.
                 if (victim_page->is_dirty_) {
-                    disk_manager_->WritePage(victim_page->GetPageId(), victim_page->GetData());
+                    // BUG FIX: Use GetHeader() to get the start of the raw 4KB block.
+                    // Previously used GetData(), which skipped the header and caused offset errors on disk.
+                    disk_manager_->WritePage(victim_page->GetPageId(), reinterpret_cast<char*>(victim_page->GetHeader()));
                     victim_page->is_dirty_ = false;
                 }
 
