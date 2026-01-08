@@ -22,6 +22,8 @@ add_library(cmse_core STATIC
     src/disk/disk_manager.h
     src/bufferpool/buffer_pool_manager.cpp
     src/bufferpool/buffer_pool_manager.h
+    src/bufferpool/lru_replacer.cpp
+    src/bufferpool/lru_replacer.h
     src/page/page.h
     src/common/types.h
 )
