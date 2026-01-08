@@ -73,3 +73,8 @@ add_test(NAME FuzzTest COMMAND fuzz_test)
 add_executable(disk_robustness_test tests/disk_robustness_test.cpp)
 target_link_libraries(disk_robustness_test PRIVATE cmse_core)
 add_test(NAME DiskRobustnessTest COMMAND disk_robustness_test)
+
+# --- LRU Unit Test ---
+add_executable(lru_replacer_test tests/lru_replacer_test.cpp)
+target_link_libraries(lru_replacer_test PRIVATE cmse_core)
+add_test(NAME LRUReplacerTest COMMAND lru_replacer_test)
