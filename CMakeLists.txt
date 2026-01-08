@@ -28,6 +28,7 @@ add_library(cmse_core STATIC
     src/common/types.h
     src/utils/log_manager.cpp
     src/utils/log_manager.h
+    src/adapter/btree_adapter.cpp
     src/adapter/btree_adapter.h
     src/adapter/trie_adapter.h
     src/versioning/version_manager.h
@@ -88,3 +89,8 @@ add_test(NAME LRUReplacerTest COMMAND lru_replacer_test)
 add_executable(log_manager_test tests/log_manager_test.cpp)
 target_link_libraries(log_manager_test PRIVATE cmse_core)
 add_test(NAME LogManagerTest COMMAND log_manager_test)
+
+# --- BTree Adapter Test ---
+add_executable(btree_adapter_test tests/btree_adapter_test.cpp)
+target_link_libraries(btree_adapter_test PRIVATE cmse_core)
+add_test(NAME BTreeAdapterTest COMMAND btree_adapter_test)
