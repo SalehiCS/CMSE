@@ -24,25 +24,21 @@ namespace cmse::utils {
             // 2. Generate Resource ID
             // We use modulo to simulate updates on existing resources.
             // e.g., if i % 50, it means we have 50 unique resources being logged repeatedly.
-            // This is crucial for testing B+Tree updates and MVCC versions later.
             record.resource_id = start_resource_id + (i % 50);
 
             // 3. Generate Resource Name
             // Format: "vm-node-XX"
-            // We align the name with the ID logic (i % 50) so ID and Name are consistent.
             std::string name = "vm-node-" + std::to_string(i % 50);
 
-            // Safe copy to fixed-size char array
-            std::strncpy(record.resource_name, name.c_str(), sizeof(record.resource_name) - 1);
-            record.resource_name[sizeof(record.resource_name) - 1] = '\0'; // Ensure null-termination
+            // Safe copy using strncpy_s (MSVC secure version)
+            // _TRUNCATE ensures that if the string is too long, it is truncated and null-terminated.
+            strncpy_s(record.resource_name, sizeof(record.resource_name), name.c_str(), _TRUNCATE);
 
             // 4. Generate Event Type
-            // Cycle through common cloud event types
             const char* events[] = { "START", "STOP", "RESTART", "ERROR", "WARNING", "DEPLOY" };
             std::string event = events[i % 6];
 
-            std::strncpy(record.event_type, event.c_str(), sizeof(record.event_type) - 1);
-            record.event_type[sizeof(record.event_type) - 1] = '\0';
+            strncpy_s(record.event_type, sizeof(record.event_type), event.c_str(), _TRUNCATE);
 
             logs.push_back(record);
         }
@@ -85,7 +81,6 @@ namespace cmse::utils {
                 }
                 catch (const std::exception& e) {
                     std::cerr << "[LogManager] Warning: Failed to parse line " << line_number << ": " << e.what() << std::endl;
-                    // Continue reading other lines even if one fails
                 }
             }
         }
@@ -102,7 +97,7 @@ namespace cmse::utils {
 
         // Expected Format: timestamp_ticks,resource_id,resource_name,event_type
 
-        // 1. Parse Timestamp (stored as int64 ticks)
+        // 1. Parse Timestamp
         if (std::getline(ss, segment, ',')) {
             try {
                 int64_t ticks = std::stoll(segment);
@@ -110,7 +105,6 @@ namespace cmse::utils {
                 record.timestamp = std::chrono::system_clock::time_point(duration);
             }
             catch (...) {
-                // Handle parsing error if file is corrupted
                 record.timestamp = std::chrono::system_clock::now();
             }
         }
@@ -127,14 +121,12 @@ namespace cmse::utils {
 
         // 3. Parse Resource Name
         if (std::getline(ss, segment, ',')) {
-            std::strncpy(record.resource_name, segment.c_str(), sizeof(record.resource_name) - 1);
-            record.resource_name[sizeof(record.resource_name) - 1] = '\0';
+            strncpy_s(record.resource_name, sizeof(record.resource_name), segment.c_str(), _TRUNCATE);
         }
 
         // 4. Parse Event Type
         if (std::getline(ss, segment, ',')) {
-            std::strncpy(record.event_type, segment.c_str(), sizeof(record.event_type) - 1);
-            record.event_type[sizeof(record.event_type) - 1] = '\0';
+            strncpy_s(record.event_type, sizeof(record.event_type), segment.c_str(), _TRUNCATE);
         }
 
         return record;

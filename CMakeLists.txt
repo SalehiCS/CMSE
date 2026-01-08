@@ -26,6 +26,11 @@ add_library(cmse_core STATIC
     src/bufferpool/lru_replacer.h
     src/page/page.h
     src/common/types.h
+    src/utils/log_manager.cpp
+    src/utils/log_manager.h
+    src/adapter/btree_adapter.h
+    src/adapter/trie_adapter.h
+    src/versioning/version_manager.h
 )
 
 target_include_directories(cmse_core PUBLIC src)
@@ -78,3 +83,8 @@ add_test(NAME DiskRobustnessTest COMMAND disk_robustness_test)
 add_executable(lru_replacer_test tests/lru_replacer_test.cpp)
 target_link_libraries(lru_replacer_test PRIVATE cmse_core)
 add_test(NAME LRUReplacerTest COMMAND lru_replacer_test)
+
+# --- Log Manager Test ---
+add_executable(log_manager_test tests/log_manager_test.cpp)
+target_link_libraries(log_manager_test PRIVATE cmse_core)
+add_test(NAME LogManagerTest COMMAND log_manager_test)
