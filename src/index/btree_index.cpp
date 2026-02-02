@@ -31,25 +31,50 @@ namespace cmse::index {
     bool BTreeIndex::Insert(const KeyType& key, const ValueType& value) {
         std::lock_guard<std::mutex> lock(latch_);
 
-        if (root_page_id_ == INVALID_PAGE_ID) {
-            StartNewTree(key, value);
-            return true;
+        int attempts = 0;
+        const int MAX_ATTEMPTS = 5; // Safety limit to prevent infinite loops
+
+        // Retry loop: If a split occurs, we loop back to find the correct leaf again
+        // and insert the key into the newly available space.
+        while (attempts < MAX_ATTEMPTS) {
+
+            // Case 1: Tree is empty, create the first root
+            if (root_page_id_ == INVALID_PAGE_ID) {
+                StartNewTree(key, value);
+                return true;
+            }
+
+            // Case 2: Traverse to find the correct leaf node
+            TraversalContext ctx;
+            cmse::Page* leaf_page = FindLeaf(key, ctx, true); // for_write = true
+
+            if (leaf_page == nullptr) {
+                std::cerr << "[BTreeIndex] Error: Could not find leaf for key " << key << std::endl;
+                return false;
+            }
+
+            // Case 3: Try to insert into the leaf
+            if (adapter_.applyUpdateToLeaf(leaf_page, key, value)) {
+                // Success! The key fit into the page.
+                // Unpin all pages in the path and mark leaf as dirty.
+                ctx.UnpinAll(bpm_, true);
+                return true;
+            }
+
+            // Case 4: Leaf is full, split is required.
+            // HandleSplit will split the node and unpin all pages involved.
+            HandleSplit(leaf_page, ctx);
+
+            // CRITICAL FIX:
+            // We do NOT return true here anymore.
+            // We must loop back (continue) to re-invoke FindLeaf and insert the pending key.
+            // The key (e.g., 140) was NOT inserted yet, we only made space for it.
+            attempts++;
         }
 
-        TraversalContext ctx;
-        cmse::Page* leaf_page = FindLeaf(key, ctx, true);
-
-        if (leaf_page == nullptr) return false;
-
-        if (adapter_.applyUpdateToLeaf(leaf_page, key, value)) {
-            ctx.UnpinAll(bpm_, true);
-            return true;
-        }
-
-        HandleSplit(leaf_page, ctx);
-        return true;
+        std::cerr << "[BTreeIndex] Fatal Error: Insert failed after " << MAX_ATTEMPTS << " split attempts." << std::endl;
+        return false;
     }
-
     bool BTreeIndex::GetValue(const KeyType& key, ValueType& result) {
         std::lock_guard<std::mutex> lock(latch_);
 
@@ -169,6 +194,7 @@ namespace cmse::index {
     }
 
     void BTreeIndex::HandleSplit(cmse::Page* node, TraversalContext& ctx) {
+        // 1. Allocate a new page for the sibling
         page_id_t sibling_id;
         cmse::Page* sibling_page = bpm_->NewPage(sibling_id);
 
@@ -178,12 +204,32 @@ namespace cmse::index {
             return;
         }
 
+        // 2. Perform the Split Logic
         cmse::adapter::SplitResult result;
         adapter_.splitNode(node, sibling_page, &result);
 
+        // ============================================================
+        // [FIX] CRITICAL: Update Leaf Linked-List Pointers
+        // ============================================================
+        if (adapter_.isLeaf(node)) {
+            // Cast to Leaf Node structure
+            auto* left_leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(node->GetData());
+            auto* right_leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(sibling_page->GetData());
+
+            // Maintain the chain: Left -> Right -> (Old Next)
+            right_leaf->next_leaf_id = left_leaf->next_leaf_id;
+            left_leaf->next_leaf_id = sibling_id;
+
+            // Debug print to confirm linking happens
+            // std::cout << "[Split] Linked Leaf " << node->GetPageId() << " -> " << sibling_id << std::endl;
+        }
+        // ============================================================
+
+        // 3. Remove child from stack
         ctx.path_pages.pop_back();
 
         if (ctx.path_pages.empty()) {
+            // CASE: Splitting Root
             page_id_t new_root_id;
             cmse::Page* new_root = bpm_->NewPage(new_root_id);
 
@@ -195,6 +241,7 @@ namespace cmse::index {
             bpm_->UnpinPage(sibling_id, true);
         }
         else {
+            // CASE: Propagate to Parent
             cmse::Page* parent = ctx.path_pages.back();
 
             if (adapter_.insertIntoInternal(parent, result.promoted_key, sibling_id)) {
@@ -209,7 +256,6 @@ namespace cmse::index {
             }
         }
     }
-
     void BTreeIndex::PrintTree(int limit_depth) {
         std::cout << "\n=== B+Tree Visualization (Root: " << root_page_id_ << ") ===\n";
         if (root_page_id_ == INVALID_PAGE_ID) {
