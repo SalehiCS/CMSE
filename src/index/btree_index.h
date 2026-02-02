@@ -23,11 +23,14 @@ namespace cmse::index {
         // --- Core API ---
         bool Insert(const KeyType& key, const ValueType& value);
         bool GetValue(const KeyType& key, ValueType& result);
+
+        // --- NEW: Range Scan API (Phase 2 Completion) ---
+        // Returns all records where key is in [start_key, end_key] inclusive.
+        std::vector<ValueType> Scan(const KeyType& start_key, const KeyType& end_key);
+
         page_id_t GetRootPageId() const { return root_page_id_; }
 
-        // --- NEW: Visualizer API ---
-        // Prints the tree structure to std::cout
-        // limit_depth: How deep to traverse (to avoid printing huge trees)
+        // --- Visualizer API ---
         void PrintTree(int limit_depth = 3);
 
     private:
@@ -45,7 +48,7 @@ namespace cmse::index {
         void HandleSplit(cmse::Page* node, TraversalContext& ctx);
         void StartNewTree(const KeyType& key, const ValueType& value);
 
-        // --- NEW: Helper for Visualization ---
+        // --- Helper for Visualization ---
         void PrintNode(page_id_t page_id, int depth, int limit_depth, const std::string& prefix);
     };
 
