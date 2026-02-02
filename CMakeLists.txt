@@ -112,3 +112,7 @@ add_test(NAME IntegrationTest COMMAND integration_test)
 # --- Tree Visualizer ---
 add_executable(tree_visualizer tests/tree_visualizer.cpp)
 target_link_libraries(tree_visualizer PRIVATE cmse_core)
+
+# Range Scan Test
+add_executable(range_scan_test tests/range_scan_test.cpp)
+target_link_libraries(range_scan_test cmse_core)
