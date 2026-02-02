@@ -22,18 +22,18 @@ namespace cmse::adapter {
         float density;
     };
 
-    // --- CAPACITY CALCULATION ---
-    // Page Size: 4096
-    // Header: ~24 bytes
-    // Available: 4072 bytes
+    // --- CAPACITY CALCULATION (SAFE MARGINS) ---
+    // Page Size: 4096 bytes.
+    // Previous values (338 and 14) were too close to the limit, causing Stack Corruption 
+    // due to struct alignment/padding overhead.
 
     // Internal Entry: Key(8) + PageID(4) = 12 bytes
-    // 4072 / 12 = ~339
-    constexpr int MAX_KEYS_INTERNAL = 338;
+    // Safe limit: 300 * 12 = 3600 bytes (Plenty of room for header & padding)
+    constexpr int MAX_KEYS_INTERNAL = 300;
 
-    // Leaf Entry: Key(8) + LogRecord(sizeof(LogRecord) ~ 280) = ~288 bytes
-    // 4072 / 288 = ~14
-    constexpr int MAX_KEYS_LEAF = 14;
+    // Leaf Entry: Key(8) + LogRecord(280) = ~288 bytes
+    // Safe limit: 13 * 288 = 3744 bytes (Leaves room for header)
+    constexpr int MAX_KEYS_LEAF = 13;
 
     struct BPlusInternalNode {
         BPlusNodeHeader header;
