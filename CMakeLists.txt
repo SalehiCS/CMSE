@@ -96,3 +96,8 @@ add_test(NAME LogManagerTest COMMAND log_manager_test)
 add_executable(btree_adapter_test tests/btree_adapter_test.cpp)
 target_link_libraries(btree_adapter_test PRIVATE cmse_core)
 add_test(NAME BTreeAdapterTest COMMAND btree_adapter_test)
+
+# --- Log Parser Test (Real Data) ---
+add_executable(log_parser_test tests/log_parser_test.cpp)
+target_link_libraries(log_parser_test PRIVATE cmse_core)
+add_test(NAME LogParserTest COMMAND log_parser_test)
