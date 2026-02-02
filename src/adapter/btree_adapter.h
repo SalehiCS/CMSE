@@ -22,19 +22,29 @@ namespace cmse::adapter {
         float density;
     };
 
-    // FIX: Changed to 101 to allow odd-number splitting and match the test case logic.
-    constexpr int MAX_KEYS = 101;
+    // --- CAPACITY CALCULATION ---
+    // Page Size: 4096
+    // Header: ~24 bytes
+    // Available: 4072 bytes
+
+    // Internal Entry: Key(8) + PageID(4) = 12 bytes
+    // 4072 / 12 = ~339
+    constexpr int MAX_KEYS_INTERNAL = 338;
+
+    // Leaf Entry: Key(8) + LogRecord(sizeof(LogRecord) ~ 280) = ~288 bytes
+    // 4072 / 288 = ~14
+    constexpr int MAX_KEYS_LEAF = 14;
 
     struct BPlusInternalNode {
         BPlusNodeHeader header;
-        KeyType keys[MAX_KEYS];
-        page_id_t children[MAX_KEYS + 1];
+        KeyType keys[MAX_KEYS_INTERNAL];
+        page_id_t children[MAX_KEYS_INTERNAL + 1];
     };
 
     struct BPlusLeafNode {
         BPlusNodeHeader header;
-        KeyType keys[MAX_KEYS];
-        ValueType values[MAX_KEYS];
+        KeyType keys[MAX_KEYS_LEAF];
+        ValueType values[MAX_KEYS_LEAF];
         page_id_t next_leaf_id;
     };
 
@@ -44,6 +54,10 @@ namespace cmse::adapter {
         void initInternal(Page* page);
         bool isLeaf(Page* page);
         int getCount(Page* page);
+
+        // Helper to get max keys based on node type
+        int getMaxKeys(Page* page);
+
         page_id_t findChild(Page* internal_page, const KeyType& key);
         bool shouldSkip(Page* page, const KeyType& query_min, const KeyType& query_max);
         bool applyUpdateToLeaf(Page* leaf_page, const KeyType& key, const ValueType& val);
@@ -56,6 +70,14 @@ namespace cmse::adapter {
     private:
         BPlusNodeHeader* getHeader(Page* page) {
             return reinterpret_cast<BPlusNodeHeader*>(page->GetData());
+        }
+
+        BPlusInternalNode* getInternalNode(Page* page) {
+            return reinterpret_cast<BPlusInternalNode*>(page->GetData());
+        }
+
+        BPlusLeafNode* getLeafNode(Page* page) {
+            return reinterpret_cast<BPlusLeafNode*>(page->GetData());
         }
     };
 

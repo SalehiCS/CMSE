@@ -1,22 +1,37 @@
 #include "btree_adapter.h"
 #include <iostream>
 #include <cstring>
-#include <algorithm> // For std::upper_bound, std::copy
+#include <algorithm> // For std::upper_bound, std::copy, std::distance
 
 namespace cmse::adapter {
 
     // -------------------------------------------------------------------------
-    // Helper: Accessors for Raw Page Data
+    // Helper: Accessors
     // -------------------------------------------------------------------------
 
-    // Helper to cast raw page data to Internal Node structure
+    // Explicit helpers to ensure we cast to the correct struct based on node type logic.
+    // Note: The Header part is identical in both, so checking header via either is safe initially.
+
     BPlusInternalNode* getInternalNode(Page* page) {
         return reinterpret_cast<BPlusInternalNode*>(page->GetData());
     }
 
-    // Helper to cast raw page data to Leaf Node structure
     BPlusLeafNode* getLeafNode(Page* page) {
         return reinterpret_cast<BPlusLeafNode*>(page->GetData());
+    }
+
+    // -------------------------------------------------------------------------
+    // Capacity Helper
+    // -------------------------------------------------------------------------
+
+    int BTreeAdapter::getMaxKeys(Page* page) {
+        // Reads the header to determine type, then returns the appropriate constant.
+        if (isLeaf(page)) {
+            return MAX_KEYS_LEAF;     // ~14 records (Heavy nodes)
+        }
+        else {
+            return MAX_KEYS_INTERNAL; // ~338 keys (Light nodes)
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -28,7 +43,6 @@ namespace cmse::adapter {
         leaf->header.is_leaf = true;
         leaf->header.key_count = 0;
 
-        // Initialize stats (Phase 3)
         leaf->header.min_key = 0;
         leaf->header.max_key = 0;
         leaf->header.density = 0.0f;
@@ -41,7 +55,6 @@ namespace cmse::adapter {
         internal->header.is_leaf = false;
         internal->header.key_count = 0;
 
-        // Initialize stats (Phase 3)
         internal->header.min_key = 0;
         internal->header.max_key = 0;
         internal->header.density = 0.0f;
@@ -52,34 +65,37 @@ namespace cmse::adapter {
     // -------------------------------------------------------------------------
 
     bool BTreeAdapter::isLeaf(Page* page) {
-        return getLeafNode(page)->header.is_leaf;
+        // It's safe to cast to Header directly
+        return reinterpret_cast<BPlusNodeHeader*>(page->GetData())->is_leaf;
     }
 
     int BTreeAdapter::getCount(Page* page) {
-        return getLeafNode(page)->header.key_count;
+        return reinterpret_cast<BPlusNodeHeader*>(page->GetData())->key_count;
     }
 
     page_id_t BTreeAdapter::findChild(Page* page, const KeyType& key) {
         BPlusInternalNode* internal = getInternalNode(page);
         int count = internal->header.key_count;
 
-        // Binary Search using std::upper_bound
+        // Binary Search
         auto* keys_begin = internal->keys;
         auto* keys_end = internal->keys + count;
 
         auto it = std::upper_bound(keys_begin, keys_end, key);
-
-        // FIX: Explicit cast to int to suppress warning C4244
         int index = static_cast<int>(std::distance(keys_begin, it));
 
+        // In internal node, children array has size count + 1.
+        // Index returned by upper_bound corresponds to the child pointer index directly.
+        // keys[i] separates children[i] and children[i+1].
         return internal->children[index];
     }
 
     bool BTreeAdapter::shouldSkip(Page* page, const KeyType& query_min, const KeyType& query_max) {
-        BPlusNodeHeader* header = getHeader(page);
+        BPlusNodeHeader* header = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
 
         if (header->key_count == 0) return false;
 
+        // Optimization: Skip if node range is strictly outside query range
         if (header->max_key < query_min) return true;
         if (header->min_key > query_max) return true;
 
@@ -87,27 +103,26 @@ namespace cmse::adapter {
     }
 
     // -------------------------------------------------------------------------
-    // Modification (Leaf)
+    // Modification (Leaf) - Using MAX_KEYS_LEAF
     // -------------------------------------------------------------------------
 
     bool BTreeAdapter::applyUpdateToLeaf(Page* leaf_page, const KeyType& key, const ValueType& val) {
         BPlusLeafNode* leaf = getLeafNode(leaf_page);
 
-        if (leaf->header.key_count >= MAX_KEYS) {
-            return false; // Page is full
+        // Check against LEAF capacity
+        if (leaf->header.key_count >= MAX_KEYS_LEAF) {
+            return false; // Page is full, require split
         }
 
         int count = leaf->header.key_count;
 
-        // Find position to insert using Binary Search
+        // Binary Search to find insertion point
         auto* keys_begin = leaf->keys;
         auto* keys_end = leaf->keys + count;
         auto it = std::upper_bound(keys_begin, keys_end, key);
-
-        // FIX: Explicit cast to int
         int index = static_cast<int>(std::distance(keys_begin, it));
 
-        // Shift existing elements to the right
+        // Shift existing elements right
         for (int i = count; i > index; i--) {
             leaf->keys[i] = leaf->keys[i - 1];
             leaf->values[i] = leaf->values[i - 1];
@@ -115,7 +130,7 @@ namespace cmse::adapter {
 
         // Insert new entry
         leaf->keys[index] = key;
-        leaf->values[index] = val;
+        leaf->values[index] = val; // Copy assignment of LogRecord
         leaf->header.key_count++;
 
         updateStatistics(leaf_page);
@@ -124,7 +139,7 @@ namespace cmse::adapter {
     }
 
     // -------------------------------------------------------------------------
-    // Modification (Internal)
+    // Modification (Internal) - Using MAX_KEYS_INTERNAL
     // -------------------------------------------------------------------------
 
     void BTreeAdapter::updateChildPointer(Page* parent_page, page_id_t old_child_id, page_id_t new_child_id) {
@@ -132,6 +147,7 @@ namespace cmse::adapter {
         int count = internal->header.key_count;
 
         bool found = false;
+        // Search in children array (size is count + 1)
         for (int i = 0; i <= count; i++) {
             if (internal->children[i] == old_child_id) {
                 internal->children[i] = new_child_id;
@@ -141,26 +157,24 @@ namespace cmse::adapter {
         }
 
         if (!found) {
-            std::cerr << "[BTreeAdapter] CRITICAL: Could not find child pointer "
-                << old_child_id << " in parent page." << std::endl;
+            std::cerr << "[BTreeAdapter] Error: Parent pointer update failed. Child "
+                << old_child_id << " not found." << std::endl;
         }
     }
 
     bool BTreeAdapter::insertIntoInternal(Page* internal_page, const KeyType& key, page_id_t right_child_id) {
         BPlusInternalNode* internal = getInternalNode(internal_page);
 
-        if (internal->header.key_count >= MAX_KEYS) {
-            return false; // Full
+        // Check against INTERNAL capacity
+        if (internal->header.key_count >= MAX_KEYS_INTERNAL) {
+            return false;
         }
 
         int count = internal->header.key_count;
 
-        // Find position using Binary Search
         auto* keys_begin = internal->keys;
         auto* keys_end = internal->keys + count;
         auto it = std::upper_bound(keys_begin, keys_end, key);
-
-        // FIX: Explicit cast to int
         int index = static_cast<int>(std::distance(keys_begin, it));
 
         // Shift keys
@@ -168,12 +182,11 @@ namespace cmse::adapter {
             internal->keys[i] = internal->keys[i - 1];
         }
 
-        // Shift children
+        // Shift children (children array is larger by 1)
         for (int i = count + 1; i > index + 1; i--) {
             internal->children[i] = internal->children[i - 1];
         }
 
-        // Insert data
         internal->keys[index] = key;
         internal->children[index + 1] = right_child_id;
         internal->header.key_count++;
@@ -190,14 +203,14 @@ namespace cmse::adapter {
         bool is_leaf_node = isLeaf(node_to_split);
 
         if (is_leaf_node) {
-            // --- LEAF SPLIT ---
+            // --- LEAF SPLIT (Uses MAX_KEYS_LEAF) ---
             BPlusLeafNode* original = getLeafNode(node_to_split);
             BPlusLeafNode* sibling = getLeafNode(new_right_page);
             initLeaf(new_right_page);
 
-            int split_index = MAX_KEYS / 2;
+            int split_index = MAX_KEYS_LEAF / 2;
 
-            // Copy data to new sibling
+            // Copy 2nd half to sibling
             int sibling_count = 0;
             for (int i = split_index; i < original->header.key_count; i++) {
                 sibling->keys[sibling_count] = original->keys[i];
@@ -208,9 +221,11 @@ namespace cmse::adapter {
             original->header.key_count = split_index;
             sibling->header.key_count = sibling_count;
 
+            // Link Linked-List
             sibling->next_leaf_id = original->next_leaf_id;
+            // Original's next pointer update happens in caller (VersionManager/BTreeIndex)
 
-            // Promote key (Copy up)
+            // Promote Key (Copy Up for Leaf)
             out_result->promoted_key = sibling->keys[0];
 
             updateStatistics(node_to_split);
@@ -218,22 +233,24 @@ namespace cmse::adapter {
 
         }
         else {
-            // --- INTERNAL SPLIT ---
+            // --- INTERNAL SPLIT (Uses MAX_KEYS_INTERNAL) ---
             BPlusInternalNode* original = getInternalNode(node_to_split);
             BPlusInternalNode* sibling = getInternalNode(new_right_page);
             initInternal(new_right_page);
 
-            int split_index = MAX_KEYS / 2;
+            int split_index = MAX_KEYS_INTERNAL / 2;
 
-            // Promote key (Push up)
+            // Promote Key (Push Up for Internal)
             out_result->promoted_key = original->keys[split_index];
 
+            // Move keys to sibling
             int sibling_count = 0;
             for (int i = split_index + 1; i < original->header.key_count; i++) {
                 sibling->keys[sibling_count] = original->keys[i];
                 sibling_count++;
             }
 
+            // Move children to sibling
             for (int i = split_index + 1; i <= original->header.key_count; i++) {
                 sibling->children[i - (split_index + 1)] = original->children[i];
             }
@@ -265,7 +282,7 @@ namespace cmse::adapter {
     // -------------------------------------------------------------------------
 
     void BTreeAdapter::updateStatistics(Page* page) {
-        BPlusNodeHeader* header = getHeader(page);
+        BPlusNodeHeader* header = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
         bool is_leaf = header->is_leaf;
         int count = header->key_count;
 
@@ -276,18 +293,23 @@ namespace cmse::adapter {
             return;
         }
 
+        int max_capacity = 0;
+
         if (is_leaf) {
             BPlusLeafNode* leaf = getLeafNode(page);
             header->min_key = leaf->keys[0];
             header->max_key = leaf->keys[count - 1];
+            max_capacity = MAX_KEYS_LEAF;
         }
         else {
             BPlusInternalNode* internal = getInternalNode(page);
             header->min_key = internal->keys[0];
             header->max_key = internal->keys[count - 1];
+            max_capacity = MAX_KEYS_INTERNAL;
         }
 
-        header->density = static_cast<float>(count) / static_cast<float>(MAX_KEYS);
+        // Calculate Density (0.0 to 1.0)
+        header->density = static_cast<float>(count) / static_cast<float>(max_capacity);
     }
 
 } // namespace cmse::adapter
