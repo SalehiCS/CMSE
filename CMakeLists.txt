@@ -34,6 +34,8 @@ add_library(cmse_core STATIC
     src/versioning/version_manager.h
     src/utils/log_parser.cpp
     src/utils/log_parser.h
+    src/index/btree_index.cpp
+    src/index/btree_index.h
 )
 
 target_include_directories(cmse_core PUBLIC src)
