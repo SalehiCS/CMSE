@@ -6,27 +6,36 @@
 
 namespace cmse::utils {
 
-    /**
-     * LogParser
-     * Responsible for parsing raw system logs (systemd-journal style).
-     * Follows the "Line-by-line" reading requirement[cite: 16].
-     */
     class LogParser {
     public:
-        /**
-         * Parses a log file and returns a vector of structured LogRecords.
-         * NOTE: In a production scenario (Phase 4), this should likely return
-         * an iterator or batch to avoid loading all 100k records into RAM at once.
-         * For Phase 2 testing, a vector is acceptable.
-         */
+        // Constructor opens the file
+        explicit LogParser(const std::string& filename);
+        ~LogParser();
+
+        // New Method: Reads the next batch of records (e.g., up to 'limit' records or bytes)
+        // Returns false if EOF is reached.
+        bool GetNextBatch(std::vector<LogRecord>& out_records, size_t max_records = 100000);
+
+        // Helper to get total size (for progress bar)
+        size_t GetTotalFileSize() const;
+        size_t GetCurrentPosition();
+
+        // Keep the old static method for compatibility (optional, but good for small tests)
         static std::vector<LogRecord> parseLogFile(const std::string& filename);
 
     private:
-        // Helper to clean up strings (remove whitespace/quotes)
-        static std::string trim(const std::string& str);
+        std::ifstream infile_;
+        std::string filename_;
+        size_t file_size_ = 0;
 
-        // Helper to parse a single Key=Value line
+        // Internal state for parsing
+        LogRecord current_record_;
+        bool inside_record_ = false;
+
+        // Helpers
+        static std::string trim(const std::string& str);
         static void parseMetadataLine(const std::string& line, LogRecord& current_record);
+        void resetRecord(LogRecord& r);
     };
 
 } // namespace cmse::utils
