@@ -108,3 +108,7 @@ add_test(NAME LogParserTest COMMAND log_parser_test)
 add_executable(integration_test tests/integration_test.cpp)
 target_link_libraries(integration_test PRIVATE cmse_core)
 add_test(NAME IntegrationTest COMMAND integration_test)
+
+# --- Tree Visualizer ---
+add_executable(tree_visualizer tests/tree_visualizer.cpp)
+target_link_libraries(tree_visualizer PRIVATE cmse_core)

@@ -194,4 +194,70 @@ namespace cmse::index {
         }
     }
 
+    void BTreeIndex::PrintTree(int limit_depth) {
+        std::cout << "\n=== B+Tree Visualization (Root: " << root_page_id_ << ") ===\n";
+        if (root_page_id_ == INVALID_PAGE_ID) {
+            std::cout << "(Empty Tree)\n";
+            return;
+        }
+        PrintNode(root_page_id_, 0, limit_depth, "");
+        std::cout << "===============================================\n";
+    }
+
+    void BTreeIndex::PrintNode(page_id_t page_id, int depth, int limit_depth, const std::string& prefix) {
+        if (depth > limit_depth) return;
+
+        cmse::Page* page = bpm_->FetchPage(page_id);
+        if (page == nullptr) {
+            std::cout << prefix << "|- [ERROR: Cannot Fetch Page " << page_id << "]\n";
+            return;
+        }
+
+        bool is_leaf = adapter_.isLeaf(page);
+        int count = adapter_.getCount(page);
+        int max_keys = adapter_.getMaxKeys(page);
+
+        // Print Node Info
+        std::cout << prefix << "|- [" << (is_leaf ? "LEAF" : "INTERNAL") << "] "
+            << "PageID: " << page_id
+            << " | Usage: " << count << "/" << max_keys;
+
+        if (is_leaf) {
+            // For leaves, print range of keys
+            auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(page->GetData());
+            if (count > 0) {
+                std::cout << " | Keys: [" << leaf->keys[0] << " ... " << leaf->keys[count - 1] << "]";
+            }
+            std::cout << "\n";
+        }
+        else {
+            // For internal nodes, just print info and recurse
+            auto* internal = reinterpret_cast<cmse::adapter::BPlusInternalNode*>(page->GetData());
+            std::cout << "\n";
+
+            // Recursively print children
+            // Note: Internal nodes have (Count+1) children. 
+            // We print a few branches to give an idea.
+
+            int branches_to_print = std::min(count + 1, 3); // Print first 3 branches only
+            if (depth == limit_depth) branches_to_print = 0;
+
+            for (int i = 0; i < branches_to_print; i++) {
+                std::string new_prefix = prefix + (i == count ? "    " : "|   ");
+
+                if (i < count) {
+                    std::cout << prefix << "|   (Key >= " << internal->keys[i] << ")\n";
+                }
+
+                // Recurse to child
+                PrintNode(internal->children[i], depth + 1, limit_depth, new_prefix);
+            }
+
+            if (count + 1 > 3) {
+                std::cout << prefix << "|   (... " << (count + 1 - 3) << " more children ...)\n";
+            }
+        }
+
+        bpm_->UnpinPage(page_id, false);
+    }
 } // namespace cmse::index
