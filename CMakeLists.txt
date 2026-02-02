@@ -103,3 +103,8 @@ add_test(NAME BTreeAdapterTest COMMAND btree_adapter_test)
 add_executable(log_parser_test tests/log_parser_test.cpp)
 target_link_libraries(log_parser_test PRIVATE cmse_core)
 add_test(NAME LogParserTest COMMAND log_parser_test)
+
+# --- Integration Test (The Big One) ---
+add_executable(integration_test tests/integration_test.cpp)
+target_link_libraries(integration_test PRIVATE cmse_core)
+add_test(NAME IntegrationTest COMMAND integration_test)
