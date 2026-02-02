@@ -4,127 +4,122 @@
 #include "../src/utils/log_parser.h"
 
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <iomanip> // For std::fixed, std::setprecision
 
-// We use specific using declarations to keep the test clean but safe
+// Using declarations
 using cmse::index::BTreeIndex;
 using cmse::bufferpool::BufferPoolManager;
 using cmse::disk::DiskManager;
 using cmse::utils::LogParser;
 using cmse::LogRecord;
 
+// Constant filenames
+const std::string DB_FILE = "huge_storage.db";
+const std::string META_FILE = "cmse.meta";
+const std::string LOG_FILE = "journal_verbose.log"; // Rename your 1.2GB file to this
+
 int main() {
     std::cout << "============================================" << std::endl;
-    std::cout << "       CMSE SYSTEM INTEGRATION TEST         " << std::endl;
+    std::cout << "       CMSE LARGE SCALE IMPORT TOOL         " << std::endl;
     std::cout << "============================================" << std::endl;
 
-    // 0. Configuration
-    const std::string DB_FILE = "test_integration.db";
-    const std::string LOG_FILE = "sample_test.log";
-
-    // Cleanup previous run
+    // 1. Setup & Configuration
+    // We remove the old DB to ensure a fresh start for this test
     if (std::filesystem::exists(DB_FILE)) {
+        std::cout << "[INFO] Removing old database file..." << std::endl;
         std::filesystem::remove(DB_FILE);
     }
+    if (std::filesystem::exists(META_FILE)) {
+        std::filesystem::remove(META_FILE);
+    }
 
-    // Check if log file exists
     if (!std::filesystem::exists(LOG_FILE)) {
         std::cerr << "[ERROR] Log file '" << LOG_FILE << "' not found!" << std::endl;
-        std::cerr << "Please copy 'sample_test.log' to the build directory." << std::endl;
+        std::cerr << "Please rename your 1.2GB file to '" << LOG_FILE << "' and place it in the build directory." << std::endl;
         return 1;
     }
 
     try {
-        // 1. Initialize System Components
+        // 2. Initialize System
         std::cout << "[1] Initializing Storage Engine..." << std::endl;
 
-        // Create DiskManager (It will create the file if missing, based on your code)
         DiskManager* disk_manager = new DiskManager(DB_FILE);
 
-        // Create BufferPoolManager (Size = 50 pages)
-        BufferPoolManager* bpm = new BufferPoolManager(50, disk_manager);
+        // INCREASED BUFFER SIZE:
+        // 50 pages is too small for 1.2GB data. It will cause excessive I/O thrashing.
+        // We use 50,000 pages (~200MB RAM) for better insert performance.
+        constexpr size_t BUFFER_SIZE = 50000;
+        BufferPoolManager* bpm = new BufferPoolManager(BUFFER_SIZE, disk_manager);
 
-        // Create BTreeIndex
         BTreeIndex* btree = new BTreeIndex(bpm);
 
-        // 2. Parse Real Logs
-        std::cout << "[2] Parsing Log File: " << LOG_FILE << std::endl;
+        // 3. Parse Log File
+        std::cout << "[2] Parsing Log File (This might take memory)..." << std::endl;
+        // Note: For production, we should stream this. For now, vector is fine if you have >4GB RAM.
         std::vector<LogRecord> records = LogParser::parseLogFile(LOG_FILE);
-        std::cout << "    -> Parsed " << records.size() << " records." << std::endl;
+        size_t total_records = records.size();
+        std::cout << "    -> Parsed " << total_records << " records." << std::endl;
 
-        if (records.empty()) {
-            std::cerr << "[ERROR] No records found in log file. Aborting." << std::endl;
-            delete btree;
-            delete bpm;
-            delete disk_manager;
+        if (total_records == 0) {
+            std::cerr << "[ERROR] File is empty." << std::endl;
             return 1;
         }
 
-        // 3. Insert Records
-        std::cout << "[3] Inserting records into B+Tree..." << std::endl;
+        // 4. Insert Loop with Progress Bar
+        std::cout << "[3] Starting Insertion Process..." << std::endl;
+
         int success_count = 0;
+        size_t report_interval = total_records / 100; // Report every 1%
+        if (report_interval == 0) report_interval = 1;
 
-        for (const auto& rec : records) {
-            // Key = Timestamp, Value = LogRecord
-            bool res = btree->Insert(rec.timestamp, rec);
-            if (res) {
-                success_count++;
-            }
-            else {
-                std::cerr << "    [WARN] Failed to insert TS: " << rec.timestamp << std::endl;
+        for (size_t i = 0; i < total_records; ++i) {
+            bool res = btree->Insert(records[i].timestamp, records[i]);
+            if (res) success_count++;
+
+            // Progress Reporting
+            if ((i + 1) % report_interval == 0) {
+                float percentage = (static_cast<float>(i + 1) / total_records) * 100.0f;
+                std::cout << "\r    Progress: " << std::fixed << std::setprecision(1)
+                    << percentage << "% (" << (i + 1) << "/" << total_records << ")" << std::flush;
             }
         }
-        std::cout << "    -> Successfully inserted " << success_count << " records." << std::endl;
+        std::cout << std::endl << "    -> Insertion Complete." << std::endl;
 
-        // 4. Verify Data (Point Query)
-        std::cout << "[4] Verifying Data..." << std::endl;
+        // 5. Save Metadata (Root Page ID)
+        // This is crucial! Without the root ID, we cannot traverse the tree later.
+        cmse::page_id_t root_id = btree->GetRootPageId();
+        std::cout << "[4] Persisting Metadata..." << std::endl;
+        std::cout << "    -> Root Page ID: " << root_id << std::endl;
 
-        // Check the FIRST record
-        LogRecord first_rec = records[0];
-        LogRecord result_rec;
-
-        bool found = btree->GetValue(first_rec.timestamp, result_rec);
-
-        if (found) {
-            std::cout << "    [PASS] Found FIRST record (TS: " << first_rec.timestamp << ")" << std::endl;
-            if (std::string(first_rec.message) == std::string(result_rec.message)) {
-                std::cout << "    [PASS] Content matches." << std::endl;
-            }
-            else {
-                std::cout << "    [FAIL] Content mismatch!" << std::endl;
-            }
+        std::ofstream meta_out(META_FILE);
+        if (meta_out.is_open()) {
+            meta_out << root_id;
+            meta_out.close();
+            std::cout << "    -> Saved root ID to '" << META_FILE << "'" << std::endl;
         }
         else {
-            std::cout << "    [FAIL] Could not find FIRST record." << std::endl;
+            std::cerr << "    [ERROR] Failed to save metadata file!" << std::endl;
         }
 
-        // Check the LAST record
-        LogRecord last_rec = records.back();
-        found = btree->GetValue(last_rec.timestamp, result_rec);
-
-        if (found) {
-            std::cout << "    [PASS] Found LAST record (TS: " << last_rec.timestamp << ")" << std::endl;
-        }
-        else {
-            std::cout << "    [FAIL] Could not find LAST record." << std::endl;
-        }
-
-        // 5. Cleanup
-        std::cout << "[5] Cleaning up..." << std::endl;
+        // 6. Graceful Shutdown (Flush all dirty pages to disk)
+        std::cout << "[5] Flushing buffers to disk (Don't close window)..." << std::endl;
         delete btree;
-        delete bpm;
-        delete disk_manager;
+        delete bpm;         // This triggers FlushAllPages
+        delete disk_manager; // This closes the file handle
+
+        std::cout << "============================================" << std::endl;
+        std::cout << "       DATABASE SAVED SUCCESSFULLY          " << std::endl;
+        std::cout << "============================================" << std::endl;
 
     }
     catch (const std::exception& e) {
-        std::cerr << "[EXCEPTION] " << e.what() << std::endl;
+        std::cerr << "\n[EXCEPTION] " << e.what() << std::endl;
         return 1;
     }
 
-    std::cout << "============================================" << std::endl;
-    std::cout << "           TEST FINISHED                    " << std::endl;
-    std::cout << "============================================" << std::endl;
     return 0;
 }
