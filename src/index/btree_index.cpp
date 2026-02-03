@@ -75,12 +75,37 @@ namespace cmse::index {
         std::cerr << "[BTreeIndex] Fatal Error: Insert failed after " << MAX_ATTEMPTS << " split attempts." << std::endl;
         return false;
     }
+    // -------------------------------------------------------------------------
+        // Phase 3: Point Lookup with Pruning
+        // -------------------------------------------------------------------------
     bool BTreeIndex::GetValue(const KeyType& key, ValueType& result) {
         std::lock_guard<std::mutex> lock(latch_);
 
         if (root_page_id_ == INVALID_PAGE_ID) return false;
 
+        // --- OPTIMIZATION: Root Level Pruning ---
+        // We fetch the root page to check its global statistics.
+        // If the key is outside [min_key, max_key], we know for sure it doesn't exist.
+        // This effectively turns O(log N) into O(1) for out-of-bounds keys.
+        cmse::Page* root_page = bpm_->FetchPage(root_page_id_);
+        if (root_page != nullptr) {
+            auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_page->GetData());
+
+            // Check if statistics are initialized (total_keys > 0)
+            if (header->total_keys > 0) {
+                if (key < header->min_key || key > header->max_key) {
+                    // PRUNED: Key is out of global bounds.
+                    bpm_->UnpinPage(root_page_id_, false);
+                    return false;
+                }
+            }
+            // Always unpin after peeking
+            bpm_->UnpinPage(root_page_id_, false);
+        }
+        // ----------------------------------------
+
         TraversalContext ctx;
+        // Proceed with standard traversal if not pruned
         cmse::Page* leaf_page = FindLeaf(key, ctx, false);
 
         if (leaf_page == nullptr) return false;
@@ -89,6 +114,7 @@ namespace cmse::index {
         int count = leaf->header.key_count;
         bool found = false;
 
+        // Linear scan inside the leaf to find the exact key match
         for (int i = 0; i < count; ++i) {
             if (leaf->keys[i] == key) {
                 result = leaf->values[i];
@@ -101,36 +127,54 @@ namespace cmse::index {
         return found;
     }
 
-    // --- NEW: Scan Implementation ---
+    // -------------------------------------------------------------------------
+        // Phase 3: Range Scan with Pruning
+        // -------------------------------------------------------------------------
     std::vector<ValueType> BTreeIndex::Scan(const KeyType& start_key, const KeyType& end_key) {
         std::lock_guard<std::mutex> lock(latch_);
         std::vector<ValueType> results;
 
         if (root_page_id_ == INVALID_PAGE_ID) return results;
 
-        // 1. Find the starting leaf page
+        // --- OPTIMIZATION: Root Level Pruning ---
+        // Check if the requested range [start, end] overlaps with the tree [min, max].
+        cmse::Page* root_page = bpm_->FetchPage(root_page_id_);
+        if (root_page != nullptr) {
+            auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_page->GetData());
+
+            if (header->total_keys > 0) {
+                // Case 1: Requested range is strictly to the left of the tree
+                // Case 2: Requested range is strictly to the right of the tree
+                if (end_key < header->min_key || start_key > header->max_key) {
+                    // PRUNED: No overlap possible.
+                    bpm_->UnpinPage(root_page_id_, false);
+                    return results;
+                }
+            }
+            bpm_->UnpinPage(root_page_id_, false);
+        }
+        // ----------------------------------------
+
+        // 1. Find the starting leaf page using standard traversal
         TraversalContext ctx;
-        cmse::Page* curr_page = FindLeaf(start_key, ctx, false); // Read mode
+        cmse::Page* curr_page = FindLeaf(start_key, ctx, false);
 
         if (curr_page == nullptr) return results;
 
-        // CRITICAL: We need to traverse horizontally (Leaf -> Leaf).
-        // FindLeaf puts all ancestors + leaf into 'ctx'. 
-        // We remove the LEAF from 'ctx' so we can manage it manually, 
-        // and let 'ctx' unpin the ancestors (we don't need parents for scanning).
+        // Detach leaf from context to manage unpinning manually during horizontal scan
         ctx.path_pages.pop_back();
-        ctx.UnpinAll(bpm_, false); // Unpins parents/root
+        ctx.UnpinAll(bpm_, false); // Unpins all ancestors
 
-        // 2. Linear Scan Loop
+        // 2. Horizontal Linear Scan (Leaf -> Next Leaf)
         while (curr_page != nullptr) {
             auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(curr_page->GetData());
             int count = leaf->header.key_count;
-            page_id_t next_leaf_id = leaf->next_leaf_id; // Horizontal Link
+            page_id_t next_page_id = leaf->next_leaf_id;
 
-            // Iterate keys in this page
+            // Iterate keys in the current leaf
             for (int i = 0; i < count; ++i) {
+                // Optimization: Sorted keys allow early exit
                 if (leaf->keys[i] > end_key) {
-                    // Optimization: Since keys are sorted, if we pass end_key, we are done.
                     bpm_->UnpinPage(curr_page->GetPageId(), false);
                     return results;
                 }
@@ -140,15 +184,15 @@ namespace cmse::index {
                 }
             }
 
-            // Done with this page, move to next
+            // Move to the next leaf in the chain
             bpm_->UnpinPage(curr_page->GetPageId(), false);
 
-            if (next_leaf_id == INVALID_PAGE_ID) {
+            if (next_page_id == INVALID_PAGE_ID) {
                 break; // End of chain
             }
 
-            // Fetch next leaf
-            curr_page = bpm_->FetchPage(next_leaf_id);
+            // Fetch next leaf from Buffer Pool
+            curr_page = bpm_->FetchPage(next_page_id);
         }
 
         return results;
@@ -266,6 +310,9 @@ namespace cmse::index {
         std::cout << "===============================================\n";
     }
 
+    // -------------------------------------------------------------------------
+        // Phase 3: Visualization (Updated to show Stats)
+        // -------------------------------------------------------------------------
     void BTreeIndex::PrintNode(page_id_t page_id, int depth, int limit_depth, const std::string& prefix) {
         if (depth > limit_depth) return;
 
@@ -275,26 +322,32 @@ namespace cmse::index {
             return;
         }
 
-        bool is_leaf = adapter_.isLeaf(page);
-        int count = adapter_.getCount(page);
-        int max_keys = adapter_.getMaxKeys(page);
+        auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(page->GetData());
+        int count = header->key_count;
+        bool is_leaf = header->is_leaf;
 
+        // Print Node Info + STATISTICS
         std::cout << prefix << "|- [" << (is_leaf ? "LEAF" : "INTERNAL") << "] "
-            << "PageID: " << page_id
-            << " | Usage: " << count << "/" << max_keys;
+            << "ID: " << page_id
+            << " | Count: " << count
+            // --- Stats Display ---
+            << " | Stats { Min: " << header->min_key
+            << ", Max: " << header->max_key
+            << ", Total: " << header->total_keys
+            << ", Density: " << header->density << " }";
 
         if (is_leaf) {
             auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(page->GetData());
-            if (count > 0) {
-                std::cout << " | Keys: [" << leaf->keys[0] << " ... " << leaf->keys[count - 1] << "]";
-            }
             std::cout << "\n";
+            // Optional: Print keys for debugging
+            // if (count > 0) std::cout << prefix << "    Keys: [" << leaf->keys[0] << " ... " << leaf->keys[count-1] << "]\n";
         }
         else {
             auto* internal = reinterpret_cast<cmse::adapter::BPlusInternalNode*>(page->GetData());
             std::cout << "\n";
 
-            int branches_to_print = std::min(count + 1, 3);
+            // Print children (limited to avoid huge output)
+            int branches_to_print = std::min((int)count + 1, 3);
             if (depth == limit_depth) branches_to_print = 0;
 
             for (int i = 0; i < branches_to_print; i++) {
