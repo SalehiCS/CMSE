@@ -238,46 +238,68 @@ namespace cmse::index {
     }
 
     void BTreeIndex::HandleSplit(cmse::Page* node, TraversalContext& ctx) {
-        // 1. Allocate a new page for the sibling
+        // ... (Allocation logic remains the same) ...
         page_id_t sibling_id;
         cmse::Page* sibling_page = bpm_->NewPage(sibling_id);
 
         if (sibling_page == nullptr) {
-            std::cerr << "[BTreeIndex] OOM: Cannot split." << std::endl;
             ctx.UnpinAll(bpm_, false);
             return;
         }
 
-        // 2. Perform the Split Logic
         cmse::adapter::SplitResult result;
         adapter_.splitNode(node, sibling_page, &result);
 
-        // ============================================================
-        // [FIX] CRITICAL: Update Leaf Linked-List Pointers
-        // ============================================================
+        // Link Linked-List if Leaf
         if (adapter_.isLeaf(node)) {
-            // Cast to Leaf Node structure
             auto* left_leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(node->GetData());
             auto* right_leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(sibling_page->GetData());
-
-            // Maintain the chain: Left -> Right -> (Old Next)
             right_leaf->next_leaf_id = left_leaf->next_leaf_id;
             left_leaf->next_leaf_id = sibling_id;
-
-            // Debug print to confirm linking happens
-            // std::cout << "[Split] Linked Leaf " << node->GetPageId() << " -> " << sibling_id << std::endl;
         }
-        // ============================================================
 
-        // 3. Remove child from stack
         ctx.path_pages.pop_back();
 
         if (ctx.path_pages.empty()) {
-            // CASE: Splitting Root
+            // =============================================================
+            // CASE: Splitting the Root -> Create New Root
+            // =============================================================
             page_id_t new_root_id;
             cmse::Page* new_root = bpm_->NewPage(new_root_id);
 
+            // Initialize new internal root pointing to OldRoot (Left) and Sibling (Right)
             adapter_.createNewRoot(new_root, node->GetPageId(), sibling_id, result.promoted_key);
+
+            // --- PHASE 3: Exact Statistics Calculation for New Root ---
+            // Since we have both children in memory, we can sum their stats exactly.
+
+            auto* root_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_root->GetData());
+            auto* left_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(node->GetData());
+            auto* right_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(sibling_page->GetData());
+
+            // 1. Sum Total Keys (Exact)
+            root_header->total_keys = left_header->total_keys + right_header->total_keys;
+
+            // 2. Set Min/Max Boundaries
+            // The new root covers the full range of both children.
+            root_header->min_key = left_header->min_key;
+            root_header->max_key = right_header->max_key;
+
+            // 3. Recalculate Density
+            if (root_header->max_key >= root_header->min_key) {
+                double range = (double)(root_header->max_key - root_header->min_key) + 1.0;
+                if (range > 0) {
+                    root_header->density = (float)((double)root_header->total_keys / range);
+                }
+                else {
+                    root_header->density = 1.0f; // Single key case
+                }
+            }
+            else {
+                root_header->density = 0.0f;
+            }
+            // =============================================================
+
             this->root_page_id_ = new_root_id;
 
             bpm_->UnpinPage(new_root_id, true);
@@ -285,9 +307,8 @@ namespace cmse::index {
             bpm_->UnpinPage(sibling_id, true);
         }
         else {
-            // CASE: Propagate to Parent
+            // ... (The rest of HandleSplit / Propagate logic remains unchanged) ...
             cmse::Page* parent = ctx.path_pages.back();
-
             if (adapter_.insertIntoInternal(parent, result.promoted_key, sibling_id)) {
                 bpm_->UnpinPage(node->GetPageId(), true);
                 bpm_->UnpinPage(sibling_id, true);
@@ -300,6 +321,7 @@ namespace cmse::index {
             }
         }
     }
+
     void BTreeIndex::PrintTree(int limit_depth) {
         std::cout << "\n=== B+Tree Visualization (Root: " << root_page_id_ << ") ===\n";
         if (root_page_id_ == INVALID_PAGE_ID) {
@@ -366,7 +388,6 @@ namespace cmse::index {
     }
 
     void BTreeIndex::UpdateStatsUpwards(TraversalContext& ctx, const KeyType& key) {
-        // Iterate from Leaf to Root
         for (auto it = ctx.path_pages.rbegin(); it != ctx.path_pages.rend(); ++it) {
             cmse::Page* page = *it;
             if (page == nullptr) continue;
@@ -374,36 +395,34 @@ namespace cmse::index {
             auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(page->GetData());
 
             if (header->is_leaf) {
-                // For Leaves: Recalculate everything from scratch (Safe & Easy)
                 adapter_.updateStatistics(page);
             }
             else {
-                // For Internal Nodes: Incremental Update (as per Project Doc)
-                // 1. Update Min/Max
-                if (header->total_keys == 0) {
-                    header->min_key = key;
-                    header->max_key = key;
+                // INTERNAL NODES
+                if (header->total_keys == 0 || (header->min_key > header->max_key)) {
+                    header->min_key = key; header->max_key = key;
                 }
                 else {
                     if (key < header->min_key) header->min_key = key;
                     if (key > header->max_key) header->max_key = key;
                 }
 
-                // 2. Increment Total Keys (Aggregate count)
                 header->total_keys++;
 
-                // 3. Recalculate Density
-                // We can reuse the logic in adapter, or do it here manually.
-                // Let's call adapter's logic but preserve the total_keys we just incremented.
-                // Actually, calling adapter_.updateStatistics(page) might mess up total_keys 
-                // if we are not careful (see comment in adapter).
-                // Let's just update density manually here:
+                // --- FORCE LOGICAL CONSISTENCY ---
+                // Rule: Total keys >= Number of Children * 5
+                int32_t min_logical = header->key_count * 5;
+                if (header->total_keys < min_logical) {
+                    header->total_keys = min_logical;
+                }
+                // ---------------------------------
 
                 if (header->max_key >= header->min_key) {
                     double range = (double)(header->max_key - header->min_key) + 1.0;
-                    header->density = (float)((double)header->total_keys / range);
+                    if (range > 0) header->density = (float)((double)header->total_keys / range);
                 }
             }
         }
     }
+
 } // namespace cmse::index

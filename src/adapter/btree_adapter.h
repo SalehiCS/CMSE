@@ -26,13 +26,16 @@ namespace cmse::adapter {
         int32_t total_keys; // Aggregate count of keys in subtree
     };
 
-    // Calculate header size dynamically based on struct size
+    // Calculate header size dynamically
     constexpr int HEADER_SIZE = sizeof(BPlusNodeHeader);
     constexpr int PAGE_SIZE = 4096;
 
-    // Dynamic calculation to prevent overflow
-    constexpr int MAX_KEYS_LEAF = (PAGE_SIZE - HEADER_SIZE - sizeof(page_id_t)) / (sizeof(KeyType) + sizeof(ValueType));
-    constexpr int MAX_KEYS_INTERNAL = (PAGE_SIZE - HEADER_SIZE) / (sizeof(KeyType) + sizeof(page_id_t));
+    // SAFETY MARGIN: We subtract 32 bytes to account for struct padding/alignment.
+    // Without this, the struct size might slightly exceed 4096 bytes, causing Stack Corruption.
+    constexpr int SAFETY_MARGIN = 32;
+
+    constexpr int MAX_KEYS_LEAF = (PAGE_SIZE - HEADER_SIZE - sizeof(page_id_t) - SAFETY_MARGIN) / (sizeof(KeyType) + sizeof(ValueType));
+    constexpr int MAX_KEYS_INTERNAL = (PAGE_SIZE - HEADER_SIZE - SAFETY_MARGIN) / (sizeof(KeyType) + sizeof(page_id_t));
 
     struct BPlusInternalNode {
         BPlusNodeHeader header;

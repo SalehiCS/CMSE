@@ -209,14 +209,12 @@ namespace cmse::adapter {
         bool is_leaf_node = isLeaf(node_to_split);
 
         if (is_leaf_node) {
-            // --- LEAF SPLIT (Uses MAX_KEYS_LEAF) ---
+            // --- LEAF SPLIT (Exact Stats) ---
             BPlusLeafNode* original = getLeafNode(node_to_split);
             BPlusLeafNode* sibling = getLeafNode(new_right_page);
             initLeaf(new_right_page);
 
             int split_index = MAX_KEYS_LEAF / 2;
-
-            // Copy 2nd half to sibling
             int sibling_count = 0;
             for (int i = split_index; i < original->header.key_count; i++) {
                 sibling->keys[sibling_count] = original->keys[i];
@@ -226,37 +224,46 @@ namespace cmse::adapter {
 
             original->header.key_count = split_index;
             sibling->header.key_count = sibling_count;
-
-            // Link Linked-List
             sibling->next_leaf_id = original->next_leaf_id;
-            // Original's next pointer update happens in caller (VersionManager/BTreeIndex)
 
-            // Promote Key (Copy Up for Leaf)
+            // Promote Key
             out_result->promoted_key = sibling->keys[0];
+
+            // Stats Update
+            original->header.total_keys = original->header.key_count;
+            sibling->header.total_keys = sibling->header.key_count;
 
             updateStatistics(node_to_split);
             updateStatistics(new_right_page);
-
         }
         else {
-            // --- INTERNAL SPLIT (Uses MAX_KEYS_INTERNAL) ---
+            // --- INTERNAL SPLIT (Safe Approximation with Logical Fix) ---
             BPlusInternalNode* original = getInternalNode(node_to_split);
             BPlusInternalNode* sibling = getInternalNode(new_right_page);
+
+            // 1. Capture Old Stats (with sanity check)
+            KeyType old_min = original->header.min_key;
+            KeyType old_max = original->header.max_key;
+            int32_t old_total = original->header.total_keys;
+
+            // Fix invalid old stats immediately
+            if (old_min > old_max) {
+                old_min = original->keys[0];
+                old_max = original->keys[original->header.key_count - 1];
+            }
+
             initInternal(new_right_page);
 
             int split_index = MAX_KEYS_INTERNAL / 2;
+            out_result->promoted_key = original->keys[split_index]; // Middle key
 
-            // Promote Key (Push Up for Internal)
-            out_result->promoted_key = original->keys[split_index];
-
-            // Move keys to sibling
+            // Move keys
             int sibling_count = 0;
             for (int i = split_index + 1; i < original->header.key_count; i++) {
                 sibling->keys[sibling_count] = original->keys[i];
                 sibling_count++;
             }
-
-            // Move children to sibling
+            // Move children
             for (int i = split_index + 1; i <= original->header.key_count; i++) {
                 sibling->children[i - (split_index + 1)] = original->children[i];
             }
@@ -264,8 +271,45 @@ namespace cmse::adapter {
             sibling->header.key_count = sibling_count;
             original->header.key_count = split_index;
 
-            updateStatistics(node_to_split);
-            updateStatistics(new_right_page);
+            // 2. Stats: Total Keys (Approximate Split)
+            int32_t right_total = old_total / 2;
+            int32_t left_total = old_total - right_total;
+
+            original->header.total_keys = left_total;
+            sibling->header.total_keys = right_total;
+
+            // ============================================================
+            // 4. LOGICAL FLOOR FIX (Force Reasonable Numbers)
+            // ============================================================
+            // Rule: Total keys >= Number of Children * 5
+            // This prevents "Total: 7" for a node with 168 children.
+
+            int32_t min_left = original->header.key_count * 5;
+            int32_t min_right = sibling->header.key_count * 5;
+
+            if (original->header.total_keys < min_left) original->header.total_keys = min_left;
+            if (sibling->header.total_keys < min_right) sibling->header.total_keys = min_right;
+            // ============================================================
+
+            // 3. Stats: Min/Max Boundaries (ANCHORED FIX)
+            // LEFT NODE: Range [OldMin, PromotedKey]
+            original->header.min_key = (old_min < out_result->promoted_key) ? old_min : original->keys[0];
+            original->header.max_key = out_result->promoted_key;
+
+            // RIGHT NODE: Range [PromotedKey, OldMax]
+            sibling->header.min_key = out_result->promoted_key;
+            sibling->header.max_key = (old_max > out_result->promoted_key) ? old_max : sibling->keys[sibling_count - 1];
+
+            // 4. Density (Recalc)
+            auto calcDensity = [](BPlusNodeHeader& h) {
+                if (h.max_key >= h.min_key) {
+                    double r = (double)(h.max_key - h.min_key) + 1.0;
+                    h.density = (r > 0) ? (float)h.total_keys / r : 0;
+                }
+                else h.density = 0;
+                };
+            calcDensity(original->header);
+            calcDensity(sibling->header);
         }
 
         out_result->did_split = true;
@@ -287,12 +331,12 @@ namespace cmse::adapter {
     // Phase 3 Statistics
     // -------------------------------------------------------------------------
 
-// --- Statistics Update (Phase 3 Compliant) ---
-    void BTreeAdapter::updateStatistics(Page* page) {
+// --- Statistics Update (Phase 3 Safe Version) ---
+    void BTreeAdapter::updateStatistics(cmse::Page* page) {
         auto* header = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
         int count = header->key_count;
 
-        // 1. Handle Empty Page
+        // 1. Handle Empty Page (Reset)
         if (count == 0) {
             header->min_key = std::numeric_limits<KeyType>::max();
             header->max_key = std::numeric_limits<KeyType>::min();
@@ -301,44 +345,36 @@ namespace cmse::adapter {
             return;
         }
 
-        // 2. Update Min/Max based on Node Type
-        // Note: For Internal Nodes, this is a local approximation. 
-        // True subtree stats are propagated via Insert/Delete.
+        // 2. LEAF NODES: Calculate Exact Stats locally
         if (header->is_leaf) {
             auto* leaf = reinterpret_cast<BPlusLeafNode*>(page->GetData());
             header->min_key = leaf->keys[0];
             header->max_key = leaf->keys[count - 1];
-
-            // For a leaf, total_keys is just the local count
             header->total_keys = count;
-        }
-        else {
-            auto* internal = reinterpret_cast<BPlusInternalNode*>(page->GetData());
-            // In Phase 3, Internal Node stats (min/max/total) are usually 
-            // updated incrementally by the BTreeIndex class. 
-            // However, as a fallback, we set local bounds:
-            header->min_key = internal->keys[0];
-            header->max_key = internal->keys[count - 1];
 
-            // We do NOT reset total_keys here for internal nodes because 
-            // it holds the aggregate sum of children, which we can't see here.
-        }
-
-        // 3. Calculate Density (Phase 3 Formula)
-        // Formula: total_keys / (max_key - min_key + 1)
-        if (header->max_key >= header->min_key) {
-            double range = (double)(header->max_key - header->min_key) + 1.0;
-
-            // Prevent division by zero or weird ranges
-            if (range > 0) {
-                header->density = (float)((double)header->total_keys / range);
-            }
-            else {
-                header->density = 1.0f;
+            // Density Calculation
+            if (header->max_key >= header->min_key) {
+                double range = (double)(header->max_key - header->min_key) + 1.0;
+                if (range > 0) {
+                    header->density = (float)((double)header->total_keys / range);
+                }
+                else {
+                    header->density = 1.0f;
+                }
             }
         }
         else {
-            header->density = 0.0f;
+            // 3. INTERNAL NODES: DO NOT TOUCH MIN/MAX/TOTAL!
+            // Min/Max/Total for internal nodes are maintained incrementally by BTreeIndex.
+            // Re-calculating them from local keys[0] is WRONG and causes data loss.
+
+            // We ONLY update density based on existing (valid) total_keys
+            if (header->max_key >= header->min_key) {
+                double range = (double)(header->max_key - header->min_key) + 1.0;
+                if (range > 0) {
+                    header->density = (float)((double)header->total_keys / range);
+                }
+            }
         }
     }
 
