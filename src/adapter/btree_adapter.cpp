@@ -48,6 +48,9 @@ namespace cmse::adapter {
         leaf->header.density = 0.0f;
 
         leaf->next_leaf_id = INVALID_PAGE_ID;
+
+        leaf->header.total_keys = 0; // <--- Add this
+        updateStatistics(page);      // <--- Call update to set defaults
     }
 
     void BTreeAdapter::initInternal(Page* page) {
@@ -58,6 +61,9 @@ namespace cmse::adapter {
         internal->header.min_key = 0;
         internal->header.max_key = 0;
         internal->header.density = 0.0f;
+
+        internal->header.total_keys = 0; // <--- Add this
+        updateStatistics(page);      // <--- Call update to set defaults
     }
 
     // -------------------------------------------------------------------------
@@ -281,35 +287,59 @@ namespace cmse::adapter {
     // Phase 3 Statistics
     // -------------------------------------------------------------------------
 
+// --- Statistics Update (Phase 3 Compliant) ---
     void BTreeAdapter::updateStatistics(Page* page) {
-        BPlusNodeHeader* header = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
-        bool is_leaf = header->is_leaf;
+        auto* header = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
         int count = header->key_count;
 
+        // 1. Handle Empty Page
         if (count == 0) {
-            header->min_key = 0;
-            header->max_key = 0;
+            header->min_key = std::numeric_limits<KeyType>::max();
+            header->max_key = std::numeric_limits<KeyType>::min();
             header->density = 0.0f;
+            header->total_keys = 0;
             return;
         }
 
-        int max_capacity = 0;
-
-        if (is_leaf) {
-            BPlusLeafNode* leaf = getLeafNode(page);
+        // 2. Update Min/Max based on Node Type
+        // Note: For Internal Nodes, this is a local approximation. 
+        // True subtree stats are propagated via Insert/Delete.
+        if (header->is_leaf) {
+            auto* leaf = reinterpret_cast<BPlusLeafNode*>(page->GetData());
             header->min_key = leaf->keys[0];
             header->max_key = leaf->keys[count - 1];
-            max_capacity = MAX_KEYS_LEAF;
+
+            // For a leaf, total_keys is just the local count
+            header->total_keys = count;
         }
         else {
-            BPlusInternalNode* internal = getInternalNode(page);
+            auto* internal = reinterpret_cast<BPlusInternalNode*>(page->GetData());
+            // In Phase 3, Internal Node stats (min/max/total) are usually 
+            // updated incrementally by the BTreeIndex class. 
+            // However, as a fallback, we set local bounds:
             header->min_key = internal->keys[0];
             header->max_key = internal->keys[count - 1];
-            max_capacity = MAX_KEYS_INTERNAL;
+
+            // We do NOT reset total_keys here for internal nodes because 
+            // it holds the aggregate sum of children, which we can't see here.
         }
 
-        // Calculate Density (0.0 to 1.0)
-        header->density = static_cast<float>(count) / static_cast<float>(max_capacity);
+        // 3. Calculate Density (Phase 3 Formula)
+        // Formula: total_keys / (max_key - min_key + 1)
+        if (header->max_key >= header->min_key) {
+            double range = (double)(header->max_key - header->min_key) + 1.0;
+
+            // Prevent division by zero or weird ranges
+            if (range > 0) {
+                header->density = (float)((double)header->total_keys / range);
+            }
+            else {
+                header->density = 1.0f;
+            }
+        }
+        else {
+            header->density = 0.0f;
+        }
     }
 
 } // namespace cmse::adapter

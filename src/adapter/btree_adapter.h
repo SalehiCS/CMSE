@@ -17,23 +17,22 @@ namespace cmse::adapter {
     struct BPlusNodeHeader {
         bool is_leaf;
         int16_t key_count;
+        
+        // --- OLD: Phase 3 Requirement ---
         KeyType min_key;
         KeyType max_key;
         float density;
+        // --- NEW: Phase 3 Requirement ---
+        int32_t total_keys; // Aggregate count of keys in subtree
     };
 
-    // --- CAPACITY CALCULATION (SAFE MARGINS) ---
-    // Page Size: 4096 bytes.
-    // Previous values (338 and 14) were too close to the limit, causing Stack Corruption 
-    // due to struct alignment/padding overhead.
+    // Calculate header size dynamically based on struct size
+    constexpr int HEADER_SIZE = sizeof(BPlusNodeHeader);
+    constexpr int PAGE_SIZE = 4096;
 
-    // Internal Entry: Key(8) + PageID(4) = 12 bytes
-    // Safe limit: 300 * 12 = 3600 bytes (Plenty of room for header & padding)
-    constexpr int MAX_KEYS_INTERNAL = 300;
-
-    // Leaf Entry: Key(8) + LogRecord(280) = ~288 bytes
-    // Safe limit: 13 * 288 = 3744 bytes (Leaves room for header)
-    constexpr int MAX_KEYS_LEAF = 13;
+    // Dynamic calculation to prevent overflow
+    constexpr int MAX_KEYS_LEAF = (PAGE_SIZE - HEADER_SIZE - sizeof(page_id_t)) / (sizeof(KeyType) + sizeof(ValueType));
+    constexpr int MAX_KEYS_INTERNAL = (PAGE_SIZE - HEADER_SIZE) / (sizeof(KeyType) + sizeof(page_id_t));
 
     struct BPlusInternalNode {
         BPlusNodeHeader header;

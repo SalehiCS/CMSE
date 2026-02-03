@@ -311,4 +311,46 @@ namespace cmse::index {
         }
         bpm_->UnpinPage(page_id, false);
     }
+
+    void BTreeIndex::UpdateStatsUpwards(TraversalContext& ctx, const KeyType& key) {
+        // Iterate from Leaf to Root
+        for (auto it = ctx.path_pages.rbegin(); it != ctx.path_pages.rend(); ++it) {
+            cmse::Page* page = *it;
+            if (page == nullptr) continue;
+
+            auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(page->GetData());
+
+            if (header->is_leaf) {
+                // For Leaves: Recalculate everything from scratch (Safe & Easy)
+                adapter_.updateStatistics(page);
+            }
+            else {
+                // For Internal Nodes: Incremental Update (as per Project Doc)
+                // 1. Update Min/Max
+                if (header->total_keys == 0) {
+                    header->min_key = key;
+                    header->max_key = key;
+                }
+                else {
+                    if (key < header->min_key) header->min_key = key;
+                    if (key > header->max_key) header->max_key = key;
+                }
+
+                // 2. Increment Total Keys (Aggregate count)
+                header->total_keys++;
+
+                // 3. Recalculate Density
+                // We can reuse the logic in adapter, or do it here manually.
+                // Let's call adapter's logic but preserve the total_keys we just incremented.
+                // Actually, calling adapter_.updateStatistics(page) might mess up total_keys 
+                // if we are not careful (see comment in adapter).
+                // Let's just update density manually here:
+
+                if (header->max_key >= header->min_key) {
+                    double range = (double)(header->max_key - header->min_key) + 1.0;
+                    header->density = (float)((double)header->total_keys / range);
+                }
+            }
+        }
+    }
 } // namespace cmse::index

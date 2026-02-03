@@ -50,6 +50,8 @@ namespace cmse::index {
 
         // --- Helper for Visualization ---
         void PrintNode(page_id_t page_id, int depth, int limit_depth, const std::string& prefix);
+
+        void BTreeIndex::UpdateStatsUpwards(TraversalContext& ctx, const KeyType& key);
     };
 
 } // namespace cmse::index
