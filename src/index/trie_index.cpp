@@ -5,236 +5,219 @@ namespace cmse::index {
 
     TrieIndex::TrieIndex(cmse::bufferpool::BufferPoolManager* bpm)
         : bpm_(bpm), root_page_id_(INVALID_PAGE_ID) {
+    }
 
+    // --- Helper to fetch Guard ---
+    PageGuard TrieIndex::FetchPageGuard(page_id_t page_id) {
+        return PageGuard(bpm_, bpm_->FetchPage(page_id));
     }
 
     void TrieIndex::Insert(const std::string& key, int64_t timestamp, uint8_t log_level) {
         std::lock_guard<std::mutex> guard(latch_);
 
-        // --- LAZY INITIALIZATION ---
+        // 1. Lazy Initialization (Safe)
         if (root_page_id_ == INVALID_PAGE_ID) {
-            // Only create a root if one doesn't exist
-            cmse::Page* root_page = bpm_->NewPage(root_page_id_);
-            if (root_page == nullptr) return; // Out of memory
+            page_id_t new_root_id;
+            PageGuard root_guard(bpm_, bpm_->NewPage(new_root_id));
+            if (!root_guard.IsValid()) return; // OOM
 
-            auto* node = reinterpret_cast<cmse::TriePage*>(root_page->GetData());
+            auto* node = reinterpret_cast<cmse::TriePage*>(root_guard.Get()->GetData());
             node->Init();
-            bpm_->UnpinPage(root_page_id_, true);
 
-            // Note: In a real system, you'd update the Catalog here to save the new root_id
+            root_page_id_ = new_root_id;
+            root_guard.SetDirty(true);
+            // root_guard dies here -> Unpins automatically
         }
-        // ---------------------------
 
         if (key.empty()) return;
 
-        page_id_t current_page_id = root_page_id_;
-        cmse::TriePage* current_node = FetchTriePage(current_page_id);
+        // 2. Traversal with Guards
+        // Start at Root
+        PageGuard curr_guard = FetchPageGuard(root_page_id_);
+        if (!curr_guard.IsValid()) return;
 
-        
-        if (current_node == nullptr) return;
-
-        // 2. Traverse or Create the Path
         for (char ch : key) {
-            // Check if the child exists for character 'ch'
+            auto* current_node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
+
             if (!current_node->HasChild(ch)) {
-
-                // --- Create New Trie Node Page ---
+                // --- Create New Child ---
                 page_id_t new_child_id;
-                cmse::Page* new_page = bpm_->NewPage(new_child_id);
+                PageGuard child_guard(bpm_, bpm_->NewPage(new_child_id));
+                if (!child_guard.IsValid()) return;
 
-                if (new_page == nullptr) {
-                    bpm_->UnpinPage(current_page_id, false);
-                    return; // Out of memory
-                }
-
-                auto* child_node = reinterpret_cast<cmse::TriePage*>(new_page->GetData());
+                auto* child_node = reinterpret_cast<cmse::TriePage*>(child_guard.Get()->GetData());
                 child_node->Init();
 
                 // Link Parent -> Child
                 current_node->SetChild(ch, new_child_id);
+                curr_guard.SetDirty(true); // Parent changed
 
-                // Unpin Parent (dirty=true because we updated the child link)
-                bpm_->UnpinPage(current_page_id, true);
-
-                // Move to Child
-                current_page_id = new_child_id;
-                current_node = child_node;
+                // MOVE to Child (Parent unpins automatically)
+                curr_guard = std::move(child_guard);
             }
             else {
-                // --- Navigate to Existing Child ---
-                page_id_t next_page_id = current_node->GetChild(ch);
+                // --- Move to Existing Child ---
+                page_id_t next_id = current_node->GetChild(ch);
 
-                // Unpin Parent (dirty=false, we didn't change it)
-                bpm_->UnpinPage(current_page_id, false);
+                // Fetch next BEFORE dropping current (strictly safer, though guards handle it)
+                PageGuard next_guard = FetchPageGuard(next_id);
 
-                // Fetch Child
-                current_page_id = next_page_id;
-                current_node = FetchTriePage(current_page_id);
+                // Replace current with next (Old current unpins here)
+                curr_guard = std::move(next_guard);
+
+                if (!curr_guard.IsValid()) return;
             }
         }
 
-        // 3. We are now at the Terminal Node (End of Key)
-        // Mark it as terminal if it wasn't already
+        // 3. We are at Terminal Node
+        auto* current_node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
         if (!current_node->IsTerminal()) {
             current_node->SetTerminal(true);
+            curr_guard.SetDirty(true);
         }
 
-        // 4. Handle Value Page (The Bucket)
+        // 4. Handle Value Page (Bucket)
         page_id_t vp_id = current_node->GetValuePageId();
 
         if (vp_id == INVALID_PAGE_ID) {
-            // --- Case A: No Value Page exists yet. Create one. ---
+            // Case A: Create First Value Page
             page_id_t new_vp_id;
-            cmse::Page* vp_raw = bpm_->NewPage(new_vp_id);
+            PageGuard vp_guard(bpm_, bpm_->NewPage(new_vp_id));
+            if (!vp_guard.IsValid()) return;
 
-            auto* vp = reinterpret_cast<cmse::TrieValuePage*>(vp_raw->GetData());
+            auto* vp = reinterpret_cast<cmse::TrieValuePage*>(vp_guard.Get()->GetData());
             vp->Init();
             vp->Insert(timestamp, log_level);
 
-            // Link Trie Node -> Value Page
+            // Link Trie -> VP
             current_node->SetValuePageId(new_vp_id);
 
-            bpm_->UnpinPage(new_vp_id, true);
+            vp_guard.SetDirty(true);
+            curr_guard.SetDirty(true);
         }
         else {
-            // --- Case B: Value Page exists. Try to insert. ---
-            cmse::TrieValuePage* vp = FetchValuePage(vp_id);
+            // Case B: Existing Value Page
+            PageGuard vp_guard = FetchPageGuard(vp_id);
+            if (!vp_guard.IsValid()) return;
+
+            auto* vp = reinterpret_cast<cmse::TrieValuePage*>(vp_guard.Get()->GetData());
 
             if (!vp->IsFull()) {
-                // Sub-case B1: Space available
+                // Sub-case B1: Insert into existing
                 vp->Insert(timestamp, log_level);
-                bpm_->UnpinPage(vp_id, true);
+                vp_guard.SetDirty(true);
             }
             else {
-                // Sub-case B2: Page is FULL -> Chain Strategy (Prepend)
-                // We create a NEW Value Page, insert the data there, 
-                // and link it to the OLD Value Page.
-                // This ensures O(1) insertion time.
-
+                // Sub-case B2: Chain (Prepend new page)
                 page_id_t new_vp_id;
-                cmse::Page* new_vp_raw = bpm_->NewPage(new_vp_id);
-                auto* new_vp = reinterpret_cast<cmse::TrieValuePage*>(new_vp_raw->GetData());
+                PageGuard new_vp_guard(bpm_, bpm_->NewPage(new_vp_id));
+                if (!new_vp_guard.IsValid()) return;
 
+                auto* new_vp = reinterpret_cast<cmse::TrieValuePage*>(new_vp_guard.Get()->GetData());
                 new_vp->Init();
                 new_vp->Insert(timestamp, log_level);
 
-                // Link New -> Old (Chaining)
+                // Link New -> Old
                 new_vp->SetNextPageId(vp_id);
 
-                // Update Trie Node -> New (New Head of the chain)
+                // Link Trie -> New
                 current_node->SetValuePageId(new_vp_id);
 
-                bpm_->UnpinPage(new_vp_id, true);
-                bpm_->UnpinPage(vp_id, false); // Old page wasn't modified, just linked to
+                new_vp_guard.SetDirty(true);
+                curr_guard.SetDirty(true);
+                // Old vp_guard unpins cleanly (read-only in this op)
             }
         }
-
-        // Final unpin of the terminal Trie Node
-        bpm_->UnpinPage(current_page_id, true);
     }
 
     std::vector<cmse::TrieLogEntry> TrieIndex::Search(const std::string& key) {
         std::lock_guard<std::mutex> guard(latch_);
         std::vector<cmse::TrieLogEntry> results;
 
-
-        if (key.empty()) return results;
-
-        page_id_t current_page_id = root_page_id_;
-        cmse::TriePage* current_node = FetchTriePage(current_page_id);
+        if (root_page_id_ == INVALID_PAGE_ID || key.empty()) return results;
 
         // 1. Traverse
+        PageGuard curr_guard = FetchPageGuard(root_page_id_);
+        if (!curr_guard.IsValid()) return results;
+
         for (char ch : key) {
-            if (!current_node->HasChild(ch)) {
-                bpm_->UnpinPage(current_page_id, false);
-                return results; // Not found
-            }
+            auto* node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
 
-            page_id_t next_id = current_node->GetChild(ch);
-            bpm_->UnpinPage(current_page_id, false);
+            if (!node->HasChild(ch)) return results; // Not found (Guard unpins)
 
-            current_page_id = next_id;
-            current_node = FetchTriePage(current_page_id);
+            page_id_t next_id = node->GetChild(ch);
+
+            // Move down
+            curr_guard = FetchPageGuard(next_id);
+            if (!curr_guard.IsValid()) return results;
         }
 
-        // 2. Collect Data
-        if (current_node->IsTerminal()) {
-            page_id_t vp_id = current_node->GetValuePageId();
+        // 2. Collect
+        auto* node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
+        if (node->IsTerminal()) {
+            page_id_t vp_id = node->GetValuePageId();
 
-            // Traverse the Value Page Chain
+            // Walk the value page chain
             while (vp_id != INVALID_PAGE_ID) {
-                cmse::TrieValuePage* vp = FetchValuePage(vp_id);
+                PageGuard vp_guard = FetchPageGuard(vp_id);
+                if (!vp_guard.IsValid()) break;
 
-                // Copy entries from this page
-                std::vector<cmse::TrieLogEntry> page_entries = vp->GetEntries();
-                results.insert(results.end(), page_entries.begin(), page_entries.end());
+                auto* vp = reinterpret_cast<cmse::TrieValuePage*>(vp_guard.Get()->GetData());
 
-                // Move to next page in chain
-                page_id_t next_vp_id = vp->GetNextPageId();
-                bpm_->UnpinPage(vp_id, false);
-                vp_id = next_vp_id;
+                // Copy data
+                auto entries = vp->GetEntries();
+                results.insert(results.end(), entries.begin(), entries.end());
+
+                // Move next
+                vp_id = vp->GetNextPageId();
+                // vp_guard dies here -> unpin
             }
         }
-
-        bpm_->UnpinPage(current_page_id, false);
         return results;
     }
 
-    // --- Helpers ---
-
-    cmse::TriePage* TrieIndex::FetchTriePage(page_id_t page_id) {
-        cmse::Page* page = bpm_->FetchPage(page_id);
-        if (page == nullptr) return nullptr;
-        return reinterpret_cast<cmse::TriePage*>(page->GetData());
-    }
-
-    cmse::TrieValuePage* TrieIndex::FetchValuePage(page_id_t page_id) {
-        cmse::Page* page = bpm_->FetchPage(page_id);
-        if (page == nullptr) return nullptr;
-        return reinterpret_cast<cmse::TrieValuePage*>(page->GetData());
-    }
-
-    // Helper: Recursive DFS to collect all entries from a subtree
     void TrieIndex::CollectAll(page_id_t page_id, std::vector<cmse::TrieLogEntry>& results) {
-        cmse::TriePage* node = FetchTriePage(page_id);
-        if (node == nullptr) return;
+        PageGuard guard = FetchPageGuard(page_id);
+        if (!guard.IsValid()) return;
 
-        // 1. If this node is a terminal (end of a word), collect its data
+        auto* node = reinterpret_cast<cmse::TriePage*>(guard.Get()->GetData());
+
+        // 1. Harvest Data (if terminal)
         if (node->IsTerminal()) {
             page_id_t vp_id = node->GetValuePageId();
             while (vp_id != INVALID_PAGE_ID) {
-                cmse::TrieValuePage* vp = FetchValuePage(vp_id);
-                auto page_entries = vp->GetEntries();
-                results.insert(results.end(), page_entries.begin(), page_entries.end());
+                PageGuard vp_guard = FetchPageGuard(vp_id);
+                if (!vp_guard.IsValid()) break;
 
-                page_id_t next = vp->GetNextPageId();
-                bpm_->UnpinPage(vp_id, false);
-                vp_id = next;
+                auto* vp = reinterpret_cast<cmse::TrieValuePage*>(vp_guard.Get()->GetData());
+                auto entries = vp->GetEntries();
+                results.insert(results.end(), entries.begin(), entries.end());
+
+                vp_id = vp->GetNextPageId();
             }
         }
 
-        // 2. Recursively visit all children
-        // Note: For a production system, an iterative stack is safer, 
-        // but recursion is fine here since keys are short (max 32 chars).
+        // 2. Recursive Step
+        // To avoid pinning the entire depth of the tree (which could exhaust the BufferPool),
+        // we must collect child IDs, UNPIN the current node, and then recurse.
+
+        std::vector<page_id_t> children_to_visit;
+
+        // Optimize: Check 0..255
         for (int i = 0; i < TRIE_FANOUT; i++) {
-            // We iterate 0..255. In a real optimization, we would store a list of active children 
-            // to avoid checking 256 null pointers.
             char ch = static_cast<char>(i);
             if (node->HasChild(ch)) {
-                page_id_t child_id = node->GetChild(ch);
-
-                // Important: We must unpin the current node before recursing 
-                // to avoid holding too many pages in the BufferPool (Deadlock risk).
-                bpm_->UnpinPage(page_id, false);
-
-                CollectAll(child_id, results);
-
-                // Re-fetch current node to continue the loop (Crabbing)
-                node = FetchTriePage(page_id);
+                children_to_visit.push_back(node->GetChild(ch));
             }
         }
 
-        bpm_->UnpinPage(page_id, false);
+        // CRITICAL: Drop the current page pin BEFORE recursing!
+        guard.Drop();
+
+        // 3. Visit Children
+        for (page_id_t child_id : children_to_visit) {
+            CollectAll(child_id, results);
+        }
     }
 
     std::vector<cmse::TrieLogEntry> TrieIndex::SearchPrefix(const std::string& prefix) {
@@ -242,36 +225,29 @@ namespace cmse::index {
         std::vector<cmse::TrieLogEntry> results;
 
         if (root_page_id_ == INVALID_PAGE_ID) return results;
-        page_id_t current_page_id = root_page_id_;
 
-        if (prefix.empty()) {
-            CollectAll(root_page_id_, results);
-            return results;
-        }
+        // 1. Navigate to prefix end
+        PageGuard curr_guard = FetchPageGuard(root_page_id_);
+        if (!curr_guard.IsValid()) return results;
 
-        cmse::TriePage* current_node = FetchTriePage(current_page_id);
-
-        // 1. Navigate to the end of the prefix
         for (char ch : prefix) {
-            if (!current_node->HasChild(ch)) {
-                bpm_->UnpinPage(current_page_id, false);
-                return results; // Prefix not found
-            }
+            auto* node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
+            if (!node->HasChild(ch)) return results;
 
-            page_id_t next_id = current_node->GetChild(ch);
-            bpm_->UnpinPage(current_page_id, false);
-
-            current_page_id = next_id;
-            current_node = FetchTriePage(current_page_id);
+            page_id_t next_id = node->GetChild(ch);
+            curr_guard = FetchPageGuard(next_id);
+            if (!curr_guard.IsValid()) return results;
         }
 
-        // 2. Perform DFS from this point to find ALL descendants
-        // We are currently holding 'current_node'. We pass its ID to CollectAll.
-        // We must unpin it first because CollectAll fetches it again.
-        bpm_->UnpinPage(current_page_id, false);
+        // 2. We are at the subtree root. 
+        // We need to pass the PageID to CollectAll.
+        page_id_t subtree_root = curr_guard.Get()->GetPageId();
 
-        CollectAll(current_page_id, results);
+        // Drop guard so CollectAll can re-fetch it fresh (consistent logic)
+        curr_guard.Drop();
 
+        CollectAll(subtree_root, results);
         return results;
     }
+
 } // namespace cmse::index
