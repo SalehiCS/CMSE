@@ -6,6 +6,7 @@
 
 #include "common/types.h"
 #include "adapter/btree_adapter.h"
+#include "btree_iterator.h"
 
 namespace cmse {
     class Page;
@@ -34,6 +35,8 @@ namespace cmse::index {
         void PrintTree(int limit_depth = 3);
 
         void SetRootPageId(page_id_t root_id) { root_page_id_ = root_id; }
+        
+        BTreeIterator Begin(const KeyType& start_key);
 
     private:
         cmse::bufferpool::BufferPoolManager* bpm_;

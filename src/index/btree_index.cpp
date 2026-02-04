@@ -491,4 +491,35 @@ namespace cmse::index {
 
     }
 
+    BTreeIterator BTreeIndex::Begin(const KeyType& start_key) {
+        std::lock_guard<std::mutex> lock(latch_);
+
+        if (root_page_id_ == INVALID_PAGE_ID) {
+            return BTreeIterator(bpm_, &adapter_, nullptr, 0);
+        }
+
+        // 1. Find the starting leaf
+        TraversalContext ctx;
+        cmse::Page* leaf_page = FindLeaf(start_key, ctx, false);
+
+        // ctx holds the stack (Parent, Grandparent). We MUST unpin them now,
+        // because the Iterator only cares about the Leaf.
+        ctx.path_pages.pop_back(); // Remove leaf from stack (so we don't unpin it yet)
+        ctx.UnpinAll(bpm_, false); // Unpin ancestors
+
+        if (leaf_page == nullptr) {
+            return BTreeIterator(bpm_, &adapter_, nullptr, 0);
+        }
+
+        // 2. Find start index within the leaf
+        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(leaf_page->GetData());
+        int index = 0;
+        while (index < leaf->header.key_count && leaf->keys[index] < start_key) {
+            index++;
+        }
+
+        // 3. Return Iterator (It takes ownership of leaf_page pinning)
+        return BTreeIterator(bpm_, &adapter_, leaf_page, index);
+    }
+
 } // namespace cmse::index
