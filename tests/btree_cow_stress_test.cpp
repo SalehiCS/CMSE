@@ -64,6 +64,40 @@ public:
         std::cout << "=== ALL STRESS TESTS PASSED ===" << std::endl;
     }
 
+    // Add this Debug Helper
+    void PrintTreeStructure(page_id_t root_id) {
+        std::cout << "\n--- DEBUG TREE STRUCTURE (Root: " << root_id << ") ---\n";
+        std::vector<page_id_t> q;
+        q.push_back(root_id);
+
+        while (!q.empty()) {
+            page_id_t pid = q.front(); q.erase(q.begin());
+
+            // Hacky fetch to peek at data
+            auto* page = bpm->FetchPage(pid);
+            if (!page) continue;
+            auto* header = reinterpret_cast<adapter::BPlusNodeHeader*>(page->GetData());
+
+            std::cout << "Page " << pid << " | Leaf: " << header->is_leaf
+                << " | Keys: " << header->key_count << " { ";
+
+            if (header->is_leaf) {
+                auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(page->GetData());
+                for (int i = 0; i < header->key_count; i++) std::cout << leaf->keys[i] << " ";
+            }
+            else {
+                auto* internal = reinterpret_cast<adapter::BPlusInternalNode*>(page->GetData());
+                for (int i = 0; i < header->key_count; i++) std::cout << internal->keys[i] << " ";
+
+                // Add children to queue
+                for (int i = 0; i <= header->key_count; i++) q.push_back(internal->children[i]);
+            }
+            std::cout << "}\n";
+            bpm->UnpinPage(pid, false);
+        }
+        std::cout << "-------------------------------------------\n";
+    }
+
     // --- Scenario 1: Divergent Branches ---
     void TestBranchingHistories() {
         std::cout << "[Test 1] Divergent Branches (Git Style)..." << std::endl;
@@ -130,6 +164,10 @@ public:
 
         page_id_t root_v2 = txn.pending_root_id;
 
+        
+
+        PrintTreeStructure(root_v2); // <--- CALL THIS
+
         // Verify V1 is untouched
         btree->SetRootPageId(root_v1);
         LogRecord r;
@@ -184,6 +222,7 @@ public:
 
         std::cout << "[PASS] Torture Test Survived." << std::endl;
     }
+
 
 private:
     void ResetDB() {

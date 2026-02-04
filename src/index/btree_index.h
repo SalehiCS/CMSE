@@ -98,7 +98,10 @@ namespace cmse::index {
         * Since parents are already shadowed during traversal, we just need to
         * handle the split logic on the shadow pages.
         */
-        void HandleSplitCoW(PageGuard node_guard, std::vector<PageGuard>& ancestors, TransactionContext& txn);
+        // Update this line in btree_index.h
+        void HandleSplitCoW(PageGuard node_guard, std::vector<PageGuard>& ancestors,
+            TransactionContext& txn,
+            const KeyType& key, const ValueType& value); // <--- Add Key/Value
     };
 
 } // namespace cmse::index

@@ -6,7 +6,8 @@
 #include <iostream>
 #include <algorithm> 
 
-namespace cmse::index {
+namespace cmse::index 
+{
 
 
 
@@ -61,46 +62,61 @@ namespace cmse::index {
         // Phase 3: Point Lookup with Pruning
         // -------------------------------------------------------------------------
     bool BTreeIndex::GetValue(const KeyType& key, ValueType& result) {
-        std::lock_guard<std::mutex> lock(latch_);
+        // --- DEBUG ENTRY ---
+        if (key == 9999) {
+            std::cout << "[GetValue 9999] Called. Current Root ID: " << root_page_id_ << std::endl;
+        }
+        // -------------------
 
-        if (root_page_id_ == INVALID_PAGE_ID) return false;
+        std::lock_guard<std::mutex> guard(latch_);
 
-        // --- OPTIMIZATION: Root Level Pruning (Safe Version) ---
-        {
-            PageGuard root_guard(bpm_, bpm_->FetchPage(root_page_id_));
-            if (root_guard.IsValid()) {
-                auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_guard.Get()->GetData());
-
-                // Check if global stats allow us to skip
-                if (header->total_keys > 0) {
-                    if (key < header->min_key || key > header->max_key) {
-                        return false; // AUTOMATIC UNPIN (root_guard dies here)
-                    }
-                }
-            }
-        } // root_guard dies here, releasing the pin before we traverse.
-        // -------------------------------------------------------
+        if (root_page_id_ == INVALID_PAGE_ID) {
+            if (key == 9999) std::cout << "[GetValue 9999] FAIL: Root is Invalid!" << std::endl;
+            return false;
+        }
 
         TraversalContext ctx;
-        // FindLeaf returns a Guard now. No manual unpin needed.
+
+        // Explicitly call FindLeaf and check result
         PageGuard leaf_guard = FindLeaf(key, ctx, false);
 
-        if (!leaf_guard.IsValid()) return false;
+        if (!leaf_guard.IsValid()) {
+            if (key == 9999) std::cout << "[GetValue 9999] FAIL: FindLeaf returned Invalid Guard." << std::endl;
+            return false;
+        }
 
         auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(leaf_guard.Get()->GetData());
-        int count = leaf->header.key_count;
 
-        // Linear scan inside the leaf
-        for (int i = 0; i < count; ++i) {
-            if (leaf->keys[i] == key) {
-                result = leaf->values[i];
-                return true; // AUTOMATIC UNPIN (leaf_guard dies here)
+        // Debug the Leaf Content
+        if (key == 9999) {
+            std::cout << "[GetValue 9999] Reached Leaf Page " << leaf_guard.Get()->GetPageId()
+                << " with " << leaf->header.key_count << " keys." << std::endl;
+            // Print first and last key to confirm range
+            if (leaf->header.key_count > 0) {
+                std::cout << "   -> Range: [" << leaf->keys[0] << " ... "
+                    << leaf->keys[leaf->header.key_count - 1] << "]" << std::endl;
             }
         }
 
-        return false; // AUTOMATIC UNPIN
-    }
+        // Search inside the leaf
+        int index = -1;
+        // Simple linear scan for safety/debug
+        for (int i = 0; i < leaf->header.key_count; i++) {
+            if (leaf->keys[i] == key) {
+                index = i;
+                break;
+            }
+        }
 
+        if (index != -1) {
+            result = leaf->values[index];
+            if (key == 9999) std::cout << "[GetValue 9999] SUCCESS: Found at index " << index << std::endl;
+            return true;
+        }
+
+        if (key == 9999) std::cout << "[GetValue 9999] FAIL: Key not found in this leaf." << std::endl;
+        return false;
+    }
     std::vector<ValueType> BTreeIndex::Scan(const KeyType& start_key, const KeyType& end_key) {
         std::lock_guard<std::mutex> lock(latch_);
         std::vector<ValueType> results;
@@ -200,43 +216,67 @@ namespace cmse::index {
         // 1. Fetch Root safely
         PageGuard curr_guard(bpm_, bpm_->FetchPage(root_page_id_));
 
+        // --- DEBUG PRINT START ---
+        if (key == 9999 || key == -1) {
+            std::cout << "[FindLeaf " << key << "] Start at Root: " << root_page_id_ << std::endl;
+        }
+        // --- DEBUG PRINT END ---
+
         if (!curr_guard.IsValid()) {
-            return {}; // Return empty guard (safe null)
+            return {};
         }
 
         // 2. Traversal Loop
         while (!adapter_.isLeaf(curr_guard.Get())) {
 
-            // Save current parent to stack (MOVE ownership to stack)
-            // We create a NEW guard for the stack because we need to keep the parent pinned
-            // if we are "tracing" (for_write=true).
+            // --- DEBUG PRINT START ---
+            if (key == 9999 || key == -1) {
+                auto* h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(curr_guard.Get()->GetData());
+                auto* internal = reinterpret_cast<cmse::adapter::BPlusInternalNode*>(curr_guard.Get()->GetData());
+                std::cout << "[FindLeaf " << key << "] At Page " << curr_guard.Get()->GetPageId()
+                    << " (Count: " << h->key_count << ", MaxKey: " << h->max_key << ")" << std::endl;
+            }
+            // --- DEBUG PRINT END ---
 
             if (for_write) {
-                // For stack, we need a separate pin or move. 
-                // Since FetchPage increments pin count once, and we want to keep it:
-                // We move the current guard into the stack.
+                // For write/stack tracing, keep parents pinned
                 Page* raw_ptr = curr_guard.Get();
                 ctx.path_pages.push_back(std::move(curr_guard));
 
-                // Now calculate next child using the raw pointer (safe, stack holds pin)
                 page_id_t next_id = adapter_.findChild(raw_ptr, key);
 
-                // Fetch next
+                // --- DEBUG PRINT ---
+                if (key == 9999 || key == -1) {
+                    std::cout << "   -> Chose Child: " << next_id << std::endl;
+                }
+                // -------------------
+
                 curr_guard = PageGuard(bpm_, bpm_->FetchPage(next_id));
             }
             else {
-                // Read-only mode: We don't need to keep parents pinned.
-                // We can drop the current one before fetching the next.
+                // Read-only mode: Crab walking (Drop parent before fetching child)
                 page_id_t next_id = adapter_.findChild(curr_guard.Get(), key);
-                curr_guard.Drop(); // Unpin current
 
+                // --- DEBUG PRINT ---
+                if (key == 9999 || key == -1) {
+                    std::cout << "   -> Chose Child: " << next_id << std::endl;
+                }
+                // -------------------
+
+                curr_guard.Drop();
                 curr_guard = PageGuard(bpm_, bpm_->FetchPage(next_id));
             }
 
             if (!curr_guard.IsValid()) return {};
         }
 
-        return curr_guard; // Transfer ownership of the leaf to caller
+        // --- DEBUG PRINT START ---
+        if (key == 9999 || key == -1) {
+            std::cout << "[FindLeaf " << key << "] Landed on Leaf: " << curr_guard.Get()->GetPageId() << std::endl;
+        }
+        // --- DEBUG PRINT END ---
+
+        return curr_guard;
     }
 
     void BTreeIndex::HandleSplit(PageGuard node_guard, TraversalContext& ctx) {
@@ -687,71 +727,73 @@ namespace cmse::index {
 
         // --- 4. Split Handling (Shadow) ---
         // If we are here, the Shadow Leaf is full.
-        HandleSplitCoW(std::move(curr_guard), ancestors, txn);
+        HandleSplitCoW(std::move(curr_guard), ancestors, txn, key, value);
         return true;
     }
 
-    void BTreeIndex::HandleSplitCoW(PageGuard node_guard, std::vector<PageGuard>& ancestors, TransactionContext& txn) {
-        // This logic mimics HandleSplit but uses 'txn' to allocate new pages
-        // and 'ancestors' which are already Writable Shadows.
+    void BTreeIndex::HandleSplitCoW(PageGuard node_guard, std::vector<PageGuard>& ancestors,
+        TransactionContext& txn,
+        const KeyType& key, const ValueType& value) {
 
-        // 1. Create Sibling (New Page in this Txn)
+        // A. Create Sibling
         page_id_t sibling_id;
         PageGuard sibling_guard(bpm_, bpm_->NewPage(sibling_id));
         if (!sibling_guard.IsValid()) return;
+        txn.created_pages.push_back(sibling_id);
 
-        txn.created_pages.push_back(sibling_id); // Register new page
-
-        // 2. Perform Split
+        // B. Perform Split (Moves half existing keys to sibling)
         cmse::adapter::SplitResult result;
         adapter_.splitNode(node_guard.Get(), sibling_guard.Get(), &result);
+
+        // --- C. CRITICAL FIX: INSERT THE PENDING KEY ---
+        // We must decide if the new key goes to the Old Leaf (node_guard) or New Sibling (sibling_guard).
+        // The 'promoted_key' tells us the split point.
+
+        if (key >= result.promoted_key) {
+            // Goes to New Sibling
+            adapter_.applyUpdateToLeaf(sibling_guard.Get(), key, value);
+        }
+        else {
+            // Goes to Old Leaf
+            adapter_.applyUpdateToLeaf(node_guard.Get(), key, value);
+        }
+        // -----------------------------------------------
 
         KeyType key_to_insert = result.promoted_key;
         page_id_t child_val_to_insert = sibling_id;
 
-        // Drop guards to stop pinning (we rely on IDs for parents)
         node_guard.Drop();
         sibling_guard.Drop();
 
-        // 3. Propagate Upwards
+        // D. Propagate Upwards (Existing Logic)
         while (true) {
-            // Case A: Root Split
             if (ancestors.empty()) {
-                // Create New Root
                 page_id_t new_root_id;
                 PageGuard new_root_guard(bpm_, bpm_->NewPage(new_root_id));
                 if (!new_root_guard.IsValid()) return;
+                txn.created_pages.push_back(new_root_id);
 
-                txn.created_pages.push_back(new_root_id); // Register
-
-                // Link: [OldRootShadow] [Key] [NewSibling]
-                // Note: We use txn.pending_root_id which is the Current Shadow Root
                 adapter_.createNewRoot(new_root_guard.Get(), txn.pending_root_id, child_val_to_insert, key_to_insert);
-
-                // Update Transaction Root
                 txn.pending_root_id = new_root_id;
                 return;
             }
 
-            // Case B: Insert into Parent (Shadow)
             PageGuard parent_guard = std::move(ancestors.back());
             ancestors.pop_back();
 
             if (adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert)) {
-                return; // Done
+                return;
             }
 
-            // Case C: Parent Full -> Split Parent
+            // Parent Full -> Split Parent
             page_id_t p_sibling_id;
             PageGuard p_sibling_guard(bpm_, bpm_->NewPage(p_sibling_id));
             if (!p_sibling_guard.IsValid()) return;
-
             txn.created_pages.push_back(p_sibling_id);
 
             cmse::adapter::SplitResult p_result;
             adapter_.splitNode(parent_guard.Get(), p_sibling_guard.Get(), &p_result);
 
-            // Fix "Dropped Key"
             if (key_to_insert >= p_result.promoted_key) {
                 adapter_.insertIntoInternal(p_sibling_guard.Get(), key_to_insert, child_val_to_insert);
             }
@@ -759,11 +801,8 @@ namespace cmse::index {
                 adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert);
             }
 
-            // Move Up
             child_val_to_insert = p_sibling_id;
             key_to_insert = p_result.promoted_key;
-
-            // Loop continues...
         }
     }
-} // namespace cmse::index
+}
