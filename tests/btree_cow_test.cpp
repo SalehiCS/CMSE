@@ -141,6 +141,16 @@ public:
     void Test3_SnapshotIsolation() {
         std::cout << "[Test 3] Snapshot Isolation..." << std::endl;
 
+        // --- FIX: RESET DATABASE FOR TEST 3 ---
+        delete btree; delete bpm; delete disk;
+        // Delete the file to ensure physically fresh start
+        remove(db_file.c_str());
+
+        disk = new disk::DiskManager(db_file);
+        bpm = new bufferpool::BufferPoolManager(100, disk);
+        btree = new index::BTreeIndex(bpm);
+        // --------------------------------------
+
         // Setup: V1 has Keys [10, 20, 30]
         btree->Insert(10, createRecord(10));
         btree->Insert(20, createRecord(20));
@@ -157,8 +167,6 @@ public:
         page_id_t root_v2 = txn.pending_root_id;
 
         // --- VERIFY V1 (Old World) ---
-        // We must manually swap the root in the BTree to "Time Travel"
-        // (In a real system, we'd pass the root_id to FindLeaf, but here we hack it)
         btree->SetRootPageId(root_v1);
 
         LogRecord res;
@@ -171,8 +179,8 @@ public:
         // --- VERIFY V2 (New World) ---
         btree->SetRootPageId(root_v2);
 
-        found_10 = btree->GetValue(10, res); // Should still exist (Shared page)
-        found_40 = btree->GetValue(40, res); // Should exist now
+        found_10 = btree->GetValue(10, res);
+        found_40 = btree->GetValue(40, res);
 
         ASSERT_TRUE(found_10, "V2 should inherit 10 from V1");
         ASSERT_TRUE(found_40, "V2 should contain 40");
