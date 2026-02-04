@@ -41,6 +41,7 @@ namespace cmse::adapter {
     void BTreeAdapter::initLeaf(Page* page) {
         BPlusLeafNode* leaf = getLeafNode(page);
         leaf->header.is_leaf = true;
+        leaf->header.is_dirty = 0; // <--- NEW: Fresh node is Clean
         leaf->header.key_count = 0;
 
         leaf->header.min_key = 0;
@@ -61,6 +62,7 @@ namespace cmse::adapter {
     void BTreeAdapter::initInternal(Page* page) {
         BPlusInternalNode* internal = getInternalNode(page);
         internal->header.is_leaf = false;
+        internal->header.is_dirty = 0; // <--- NEW: Fresh node is Clean
         internal->header.key_count = 0;
 
         internal->header.min_key = 0;
@@ -399,6 +401,17 @@ namespace cmse::adapter {
                 }
             }
         }
+        // --- [NEW ADDITION] ---
+        // We have just updated/verified the stats for this node.
+        // It is now considered "Clean" (Trusted).
+        header->is_dirty = 0;
     }
 
+    void BTreeAdapter::setDirty(Page* page) {
+        if (page == nullptr) return;
+        BPlusNodeHeader* h = getHeader(page);
+        h->is_dirty = 1;
+        syncPageHeader(page);
+        
+    }
 } // namespace cmse::adapter

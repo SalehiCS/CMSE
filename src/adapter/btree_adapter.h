@@ -17,7 +17,7 @@ namespace cmse::adapter {
     struct BPlusNodeHeader {
         bool is_leaf;
         int16_t key_count;
-        
+        uint8_t is_dirty; // <--- NEW: 0 = Clean (Stats trusted), 1 = Dirty (Stats untrusted)
         // --- OLD: Phase 3 Requirement ---
         KeyType min_key;
         KeyType max_key;
@@ -68,7 +68,7 @@ namespace cmse::adapter {
         void splitNode(Page* node_to_split, Page* new_right_page, SplitResult* out_result);
         void createNewRoot(Page* new_root_page, page_id_t left_child, page_id_t right_child, const KeyType& key);
         void updateStatistics(Page* page);
-
+        void setDirty(Page* page);
     private:
         BPlusNodeHeader* getHeader(Page* page) {
             return reinterpret_cast<BPlusNodeHeader*>(page->GetData());

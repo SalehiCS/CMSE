@@ -64,6 +64,17 @@ namespace cmse::index {
             // Case 3: Try to insert into the leaf
             if (adapter_.applyUpdateToLeaf(leaf_page, key, value)) {
                 // Success! The key fit into the page.
+                
+                // --- [NEW ADDITION] ---
+                // The Leaf is updated and clean (applyUpdateToLeaf calls updateStatistics).
+                // BUT, the Ancestors (Parent, Root) are now stale (Lazy Update).
+                // We must mark them as DIRTY so we don't prune incorrectly later.
+                for (auto* page : ctx.path_pages) {
+                    // Don't mark the leaf itself (it's clean)
+                    if (page->GetPageId() != leaf_page->GetPageId()) {
+                        adapter_.setDirty(page);
+                    }
+                }
                 // Unpin all pages in the path and mark leaf as dirty.
                 ctx.UnpinAll(bpm_, true);
                 return true;
@@ -150,7 +161,8 @@ namespace cmse::index {
         if (root_page != nullptr) {
             auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_page->GetData());
 
-            if (header->total_keys > 0) {
+            // If is_dirty is 1, we CANNOT trust min/max, so we MUST NOT prune.
+            if (header->total_keys > 0 && header->is_dirty == 0) {
                 // Case 1: Requested range is strictly to the left of the tree
                 // Case 2: Requested range is strictly to the right of the tree
                 if (end_key < header->min_key || start_key > header->max_key) {
@@ -431,6 +443,7 @@ namespace cmse::index {
                 }
             }
         }
+
     }
 
 } // namespace cmse::index
