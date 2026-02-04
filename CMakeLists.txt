@@ -37,6 +37,7 @@ add_library(cmse_core STATIC
     src/index/btree_index.cpp
     src/index/btree_index.h
     src/index/trie_index.cpp
+    src/index/btree_iterator.cpp
 )
 
 target_include_directories(cmse_core PUBLIC src)
@@ -140,3 +141,6 @@ target_link_libraries(btree_visualizer PRIVATE cmse_core)
 
 add_executable(debug_path tests/debug_path.cpp)
 target_link_libraries(debug_path PRIVATE cmse_core)
+
+add_executable(btree_iterator_test tests/btree_iterator_test.cpp)
+target_link_libraries(btree_iterator_test PRIVATE cmse_core)
