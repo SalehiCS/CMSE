@@ -33,6 +33,8 @@ namespace cmse::index {
         // --- Visualizer API ---
         void PrintTree(int limit_depth = 3);
 
+        void SetRootPageId(page_id_t root_id) { root_page_id_ = root_id; }
+
     private:
         cmse::bufferpool::BufferPoolManager* bpm_;
         cmse::adapter::BTreeAdapter adapter_;

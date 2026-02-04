@@ -34,10 +34,16 @@ namespace cmse::index {
          * Returns all log entries for any key starting with the prefix.
          * (To be implemented later).
          */
-        std::vector<cmse::TrieLogEntry> SearchPrefix(const std::string& prefix);
+        std::vector<cmse::TrieLogEntry> TrieIndex::SearchPrefix(const std::string& prefix);
 
         // Helper to get the root (useful for debugging/testing)
         page_id_t GetRootId() const { return root_page_id_; }
+
+        // Helper: Recursive DFS to collect all entries from a subtree
+        void CollectAll(page_id_t page_id, std::vector<cmse::TrieLogEntry>& results);
+        
+
+        void SetRootPageId(page_id_t root_id) { root_page_id_ = root_id; }
 
     private:
         cmse::bufferpool::BufferPoolManager* bpm_;

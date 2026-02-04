@@ -192,4 +192,79 @@ namespace cmse::index {
         return reinterpret_cast<cmse::TrieValuePage*>(page->GetData());
     }
 
+    // Helper: Recursive DFS to collect all entries from a subtree
+    void TrieIndex::CollectAll(page_id_t page_id, std::vector<cmse::TrieLogEntry>& results) {
+        cmse::TriePage* node = FetchTriePage(page_id);
+        if (node == nullptr) return;
+
+        // 1. If this node is a terminal (end of a word), collect its data
+        if (node->IsTerminal()) {
+            page_id_t vp_id = node->GetValuePageId();
+            while (vp_id != INVALID_PAGE_ID) {
+                cmse::TrieValuePage* vp = FetchValuePage(vp_id);
+                auto page_entries = vp->GetEntries();
+                results.insert(results.end(), page_entries.begin(), page_entries.end());
+
+                page_id_t next = vp->GetNextPageId();
+                bpm_->UnpinPage(vp_id, false);
+                vp_id = next;
+            }
+        }
+
+        // 2. Recursively visit all children
+        // Note: For a production system, an iterative stack is safer, 
+        // but recursion is fine here since keys are short (max 32 chars).
+        for (int i = 0; i < TRIE_FANOUT; i++) {
+            // We iterate 0..255. In a real optimization, we would store a list of active children 
+            // to avoid checking 256 null pointers.
+            char ch = static_cast<char>(i);
+            if (node->HasChild(ch)) {
+                page_id_t child_id = node->GetChild(ch);
+
+                // Important: We must unpin the current node before recursing 
+                // to avoid holding too many pages in the BufferPool (Deadlock risk).
+                bpm_->UnpinPage(page_id, false);
+
+                CollectAll(child_id, results);
+
+                // Re-fetch current node to continue the loop (Crabbing)
+                node = FetchTriePage(page_id);
+            }
+        }
+
+        bpm_->UnpinPage(page_id, false);
+    }
+
+    std::vector<cmse::TrieLogEntry> TrieIndex::SearchPrefix(const std::string& prefix) {
+        std::lock_guard<std::mutex> guard(latch_);
+        std::vector<cmse::TrieLogEntry> results;
+
+        if (prefix.empty()) return results;
+
+        page_id_t current_page_id = root_page_id_;
+        cmse::TriePage* current_node = FetchTriePage(current_page_id);
+
+        // 1. Navigate to the end of the prefix
+        for (char ch : prefix) {
+            if (!current_node->HasChild(ch)) {
+                bpm_->UnpinPage(current_page_id, false);
+                return results; // Prefix not found
+            }
+
+            page_id_t next_id = current_node->GetChild(ch);
+            bpm_->UnpinPage(current_page_id, false);
+
+            current_page_id = next_id;
+            current_node = FetchTriePage(current_page_id);
+        }
+
+        // 2. Perform DFS from this point to find ALL descendants
+        // We are currently holding 'current_node'. We pass its ID to CollectAll.
+        // We must unpin it first because CollectAll fetches it again.
+        bpm_->UnpinPage(current_page_id, false);
+
+        CollectAll(current_page_id, results);
+
+        return results;
+    }
 } // namespace cmse::index

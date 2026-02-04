@@ -122,3 +122,6 @@ target_link_libraries(range_scan_test cmse_core)
 add_executable(trie_test tests/trie_test.cpp)
 target_link_libraries(trie_test PRIVATE cmse_core)
 add_test(NAME TrieTest COMMAND trie_test)
+
+add_executable(query_runner tests/query_runner.cpp)
+target_link_libraries(query_runner PRIVATE cmse_core)
