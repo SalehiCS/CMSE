@@ -290,87 +290,103 @@ namespace cmse::index {
     }
 
     void BTreeIndex::HandleSplit(cmse::Page* node, TraversalContext& ctx) {
-        // ... (Allocation logic remains the same) ...
+
+        // Variables to track what needs to be inserted into the parent
+        cmse::Page* current_node = node;
+        page_id_t current_id = node->GetPageId();
+
+        // Initial Split: We split the node that overflowed (Leaf or Internal)
         page_id_t sibling_id;
         cmse::Page* sibling_page = bpm_->NewPage(sibling_id);
-
         if (sibling_page == nullptr) {
             ctx.UnpinAll(bpm_, false);
             return;
         }
 
         cmse::adapter::SplitResult result;
+        adapter_.splitNode(current_node, sibling_page, &result);
 
-        // EXECUTE SPLIT (This handles the Linked-List connection internally)
-        adapter_.splitNode(node, sibling_page, &result);
-
-        // [REMOVED] The "Link Linked-List if Leaf" block that was here.
-        // It caused the self-pointer bug because splitNode already updated the links!
-
+        // Remove current node from path trace
         ctx.path_pages.pop_back();
 
-        if (ctx.path_pages.empty()) {
-            // =============================================================
-            // CASE: Splitting the Root -> Create New Root
-            // =============================================================
-            page_id_t new_root_id;
-            cmse::Page* new_root = bpm_->NewPage(new_root_id);
+        // Data to propagate upwards
+        KeyType key_to_insert = result.promoted_key;
+        page_id_t child_val_to_insert = sibling_id;
 
-            // Initialize new internal root pointing to OldRoot (Left) and Sibling (Right)
-            adapter_.createNewRoot(new_root, node->GetPageId(), sibling_id, result.promoted_key);
+        // Unpin children (we only need their IDs now)
+        bpm_->UnpinPage(current_id, true);
+        bpm_->UnpinPage(sibling_id, true);
 
-            // --- PHASE 3: Exact Statistics Calculation for New Root ---
-            auto* root_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_root->GetData());
-            auto* left_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(node->GetData());
-            auto* right_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(sibling_page->GetData());
+        // ==========================================================
+        // Iterative Upward Propagation
+        // ==========================================================
+        while (true) {
 
-            // 1. Sum Total Keys (Exact)
-            root_header->total_keys = left_header->total_keys + right_header->total_keys;
+            // Case 1: Reached Root (No Parent) -> Create New Root
+            if (ctx.path_pages.empty()) {
+                page_id_t new_root_id;
+                cmse::Page* new_root = bpm_->NewPage(new_root_id);
 
-            // 2. Set Min/Max Boundaries
-            root_header->min_key = left_header->min_key;
-            root_header->max_key = right_header->max_key;
+                // New Root points to: [OldRoot (current_id)] [Key] [NewChild (child_val_to_insert)]
+                adapter_.createNewRoot(new_root, current_id, child_val_to_insert, key_to_insert);
 
-            // 3. Recalculate Density
-            if (root_header->max_key >= root_header->min_key) {
-                double range = (double)(root_header->max_key - root_header->min_key) + 1.0;
-                if (range > 0) {
-                    root_header->density = (float)((double)root_header->total_keys / range);
-                }
-                else {
-                    root_header->density = 1.0f;
-                }
-            }
-            else {
-                root_header->density = 0.0f;
+                // Update stats for the new root
+                adapter_.updateStatistics(new_root);
+
+                this->root_page_id_ = new_root_id;
+                bpm_->UnpinPage(new_root_id, true);
+                return; // Done
             }
 
-            // New root is freshly calculated, so it is clean
-            root_header->is_dirty = 0;
-            // =============================================================
-
-            this->root_page_id_ = new_root_id;
-
-            bpm_->UnpinPage(new_root_id, true);
-            bpm_->UnpinPage(node->GetPageId(), true);
-            bpm_->UnpinPage(sibling_id, true);
-        }
-        else {
-            // ... (The rest of Propagate logic) ...
+            // Case 2: Parent exists
             cmse::Page* parent = ctx.path_pages.back();
-            if (adapter_.insertIntoInternal(parent, result.promoted_key, sibling_id)) {
-                bpm_->UnpinPage(node->GetPageId(), true);
-                bpm_->UnpinPage(sibling_id, true);
+
+            // Try to insert into Parent
+            if (adapter_.insertIntoInternal(parent, key_to_insert, child_val_to_insert)) {
+                // Success! Parent had space.
                 ctx.UnpinAll(bpm_, true);
+                return; // Done
+            }
+
+            // Case 3: Parent is FULL -> Must Split Parent
+            // We split here locally instead of recursion to ensure we don't drop the key.
+
+            page_id_t parent_sibling_id;
+            cmse::Page* parent_sibling = bpm_->NewPage(parent_sibling_id);
+            if (parent_sibling == nullptr) {
+                ctx.UnpinAll(bpm_, false);
+                return;
+            }
+
+            cmse::adapter::SplitResult parent_split_res;
+            adapter_.splitNode(parent, parent_sibling, &parent_split_res);
+
+            // CRITICAL FIX: The "Dropped Key" Prevention
+            // The parent just split. We still have 'key_to_insert' (from the child) pending.
+            // We must decide which half (Parent or ParentSibling) should take it.
+
+            if (key_to_insert >= parent_split_res.promoted_key) {
+                // Insert into New Right Parent
+                adapter_.insertIntoInternal(parent_sibling, key_to_insert, child_val_to_insert);
             }
             else {
-                bpm_->UnpinPage(node->GetPageId(), true);
-                bpm_->UnpinPage(sibling_id, true);
-                HandleSplit(parent, ctx);
+                // Insert into Old Left Parent
+                adapter_.insertIntoInternal(parent, key_to_insert, child_val_to_insert);
             }
+
+            // Setup for next iteration (Move up to Grandparent)
+            current_id = parent->GetPageId();                 // Old Parent becomes the child
+            child_val_to_insert = parent_sibling_id;          // Parent Sibling becomes the value to insert
+            key_to_insert = parent_split_res.promoted_key;    // The key promoted from Parent becomes the key to insert
+
+            // Unpin current level pages
+            bpm_->UnpinPage(parent->GetPageId(), true);
+            bpm_->UnpinPage(parent_sibling_id, true);
+
+            // Pop stack to move to Grandparent
+            ctx.path_pages.pop_back();
         }
     }
-
     void BTreeIndex::PrintTree(int limit_depth) {
         std::cout << "\n=== B+Tree Visualization (Root: " << root_page_id_ << ") ===\n";
         if (root_page_id_ == INVALID_PAGE_ID) {
