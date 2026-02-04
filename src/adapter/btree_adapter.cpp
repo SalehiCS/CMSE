@@ -315,7 +315,7 @@ namespace cmse::adapter {
             auto calcDensity = [](BPlusNodeHeader& h) {
                 if (h.max_key >= h.min_key) {
                     double r = (double)(h.max_key - h.min_key) + 1.0;
-                    h.density = (r > 0) ? (float)h.total_keys / r : 0;
+                    h.density = (r > 0) ? static_cast<float>(h.total_keys / r) : 0;
                 }
                 else h.density = 0;
                 };
