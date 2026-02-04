@@ -26,6 +26,7 @@ namespace cmse::index {
 
     BTreeIndex::BTreeIndex(cmse::bufferpool::BufferPoolManager* bpm, page_id_t root_id)
         : bpm_(bpm), root_page_id_(root_id) {
+
     }
 
     bool BTreeIndex::Insert(const KeyType& key, const ValueType& value) {

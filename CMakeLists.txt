@@ -131,3 +131,6 @@ target_link_libraries(trie_visualizer PRIVATE cmse_core)
 
 add_executable(debug_search tests/debug_search.cpp)
 target_link_libraries(debug_search PRIVATE cmse_core)
+
+add_executable(integrity_check tests/integrity_check.cpp)
+target_link_libraries(integrity_check PRIVATE cmse_core)

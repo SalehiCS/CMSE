@@ -137,6 +137,7 @@ namespace cmse::index {
         std::lock_guard<std::mutex> guard(latch_);
         std::vector<cmse::TrieLogEntry> results;
 
+
         if (key.empty()) return results;
 
         page_id_t current_page_id = root_page_id_;
@@ -240,9 +241,14 @@ namespace cmse::index {
         std::lock_guard<std::mutex> guard(latch_);
         std::vector<cmse::TrieLogEntry> results;
 
-        if (prefix.empty()) return results;
-
+        if (root_page_id_ == INVALID_PAGE_ID) return results;
         page_id_t current_page_id = root_page_id_;
+
+        if (prefix.empty()) {
+            CollectAll(root_page_id_, results);
+            return results;
+        }
+
         cmse::TriePage* current_node = FetchTriePage(current_page_id);
 
         // 1. Navigate to the end of the prefix
