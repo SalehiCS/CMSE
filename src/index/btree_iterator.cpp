@@ -4,32 +4,32 @@ namespace cmse {
 
     BTreeIterator::BTreeIterator(bufferpool::BufferPoolManager* bpm,
         adapter::BTreeAdapter* adapter,
-        Page* start_page,
+        PageGuard&& start_guard,
         int start_index)
-        : bpm_(bpm), adapter_(adapter), curr_page_(start_page), curr_index_(start_index), is_end_(false) {
+        : bpm_(bpm),
+        adapter_(adapter),
+        curr_guard_(std::move(start_guard)), // <--- Transfer ownership here
+        curr_index_(start_index),
+        is_end_(false) {
 
-        if (curr_page_ == nullptr) {
+        if (!curr_guard_.IsValid()) {
             is_end_ = true;
         }
         else {
-            // Validation: If starting index is out of bounds (e.g., empty tree), handle it
-            auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_page_->GetData());
+            auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_guard_->GetData());
             if (curr_index_ >= leaf->header.key_count) {
-                // Attempt to move to next page immediately
                 this->operator++();
             }
         }
     }
 
+
     BTreeIterator::~BTreeIterator() {
-        Close();
+        
     }
 
     void BTreeIterator::Close() {
-        if (curr_page_ != nullptr) {
-            bpm_->UnpinPage(curr_page_->GetPageId(), false);
-            curr_page_ = nullptr;
-        }
+        curr_guard_.Drop(); // Manually release if needed
         is_end_ = true;
     }
 
@@ -38,15 +38,15 @@ namespace cmse {
     }
 
     LogRecord& BTreeIterator::Current() {
-        // Dangerous if IsEnd() is true, but for performance we skip check
-        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_page_->GetData());
+        // Use -> arrow syntax (thanks to operator->)
+        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_guard_->GetData());
         return leaf->values[curr_index_];
     }
 
     BTreeIterator& BTreeIterator::operator++() {
         if (is_end_) return *this;
 
-        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_page_->GetData());
+        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_guard_->GetData());
 
         // 1. Advance index
         curr_index_++;
@@ -55,24 +55,50 @@ namespace cmse {
         if (curr_index_ >= leaf->header.key_count) {
             page_id_t next_id = leaf->next_leaf_id;
 
-            // Unpin current page (we are done with it)
-            bpm_->UnpinPage(curr_page_->GetPageId(), false);
-            curr_page_ = nullptr;
+            // 1. Release current page (Destroys old guard content)
+            // 2. Fetch new page
+            // 3. Wrap new page in guard
+            curr_guard_ = PageGuard(bpm_, bpm_->FetchPage(next_id));
 
             // 3. Check if there is a next page
-            if (next_id == INVALID_PAGE_ID) {
+            if (!curr_guard_.IsValid()) {
                 is_end_ = true;
             }
             else {
-                // Fetch next page
-                curr_page_ = bpm_->FetchPage(next_id);
-                if (curr_page_ == nullptr) {
-                    is_end_ = true; // Error fetching next page
-                }
-                else {
-                    curr_index_ = 0; // Reset index for new page
-                }
+                curr_index_ = 0;
             }
+        }
+        return *this;
+    }
+
+    // --- Move Constructor ---
+    BTreeIterator::BTreeIterator(BTreeIterator&& other) noexcept
+        : bpm_(other.bpm_),
+        adapter_(other.adapter_),
+        curr_guard_(std::move(other.curr_guard_)), // <--- Transfer Guard Ownership
+        curr_index_(other.curr_index_),
+        is_end_(other.is_end_) {
+
+        // Invalidate the other iterator
+        other.is_end_ = true;
+        other.curr_index_ = 0;
+    }
+
+    // --- Move Assignment Operator ---
+    BTreeIterator& BTreeIterator::operator=(BTreeIterator&& other) noexcept {
+        if (this != &other) {
+            // 1. The 'curr_guard_' Destructor runs automatically here, 
+            //    unpinning whatever page we were holding previously.
+
+            // 2. Steal resources
+            bpm_ = other.bpm_;
+            adapter_ = other.adapter_;
+            curr_guard_ = std::move(other.curr_guard_); // <--- Transfer Guard Ownership
+            curr_index_ = other.curr_index_;
+            is_end_ = other.is_end_;
+
+            // 3. Invalidate other
+            other.is_end_ = true;
         }
         return *this;
     }

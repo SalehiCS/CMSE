@@ -52,6 +52,7 @@ namespace cmse::adapter {
 
         leaf->header.total_keys = 0; // <--- Add this
         
+
         updateStatistics(page);      // <--- Call update to set defaults
 
         syncPageHeader(page);
@@ -228,94 +229,113 @@ namespace cmse::adapter {
             out_result->did_split = false;
             return;
         }
-        // ---------------------------------------------
 
         bool is_leaf_node = isLeaf(node_to_split);
 
         if (is_leaf_node) {
-            // --- LEAF SPLIT (Exact Stats) ---
+            // ==========================================================
+            // LEAF NODE SPLIT
+            // ==========================================================
             BPlusLeafNode* original = getLeafNode(node_to_split);
             BPlusLeafNode* sibling = getLeafNode(new_right_page);
+
+            // 1. Initialize Sibling (Sets next_leaf_id = -1)
             initLeaf(new_right_page);
 
+            // 2. Determine Split Point (Halfway)
             int split_index = MAX_KEYS_LEAF / 2;
             int sibling_count = 0;
+
+            // 3. Move Upper Half to Sibling
             for (int i = split_index; i < original->header.key_count; i++) {
                 sibling->keys[sibling_count] = original->keys[i];
                 sibling->values[sibling_count] = original->values[i];
                 sibling_count++;
             }
 
+            // 4. Update Counts
             original->header.key_count = split_index;
             sibling->header.key_count = sibling_count;
 
-            // LINKING LOGIC (Correct Place)
+            // 5. LINKING LOGIC (Critical for Scans)
+            // New Sibling inherits "Next" pointer from Original
             sibling->next_leaf_id = original->next_leaf_id;
+            // Original now points to Sibling
             original->next_leaf_id = new_right_page->GetPageId();
 
-            // Promote Key
+            // 6. Set Result (Promote First Key of Sibling)
             out_result->promoted_key = sibling->keys[0];
 
-            // Stats Update
-            original->header.total_keys = original->header.key_count;
-            sibling->header.total_keys = sibling->header.key_count;
-
+            // 7. Update Stats (Exact for Leaves)
             updateStatistics(node_to_split);
             updateStatistics(new_right_page);
+
         }
         else {
-            // --- INTERNAL SPLIT (Safe Approximation with Logical Fix) ---
+            // ==========================================================
+            // INTERNAL NODE SPLIT
+            // ==========================================================
             BPlusInternalNode* original = getInternalNode(node_to_split);
             BPlusInternalNode* sibling = getInternalNode(new_right_page);
 
-            // 1. Capture Old Stats (with sanity check)
+            // 1. Capture Old Stats (For Approximation)
             KeyType old_min = original->header.min_key;
             KeyType old_max = original->header.max_key;
             int32_t old_total = original->header.total_keys;
 
+            // Sanity check for stats
             if (old_min > old_max) {
                 old_min = original->keys[0];
                 old_max = original->keys[original->header.key_count - 1];
             }
 
+            // 2. Initialize Sibling
             initInternal(new_right_page);
 
+            // 3. Determine Split Point
             int split_index = MAX_KEYS_INTERNAL / 2;
-            out_result->promoted_key = original->keys[split_index]; // Middle key
 
-            // Move keys
+            // The middle key moves UP, not to the sibling
+            out_result->promoted_key = original->keys[split_index];
+
+            // 4. Move Upper Half Keys to Sibling
             int sibling_count = 0;
             for (int i = split_index + 1; i < original->header.key_count; i++) {
                 sibling->keys[sibling_count] = original->keys[i];
                 sibling_count++;
             }
-            // Move children
+
+            // 5. Move Upper Half Children to Sibling
+            // (Internal nodes have N keys and N+1 children)
             for (int i = split_index + 1; i <= original->header.key_count; i++) {
                 sibling->children[i - (split_index + 1)] = original->children[i];
             }
 
+            // 6. Update Counts
             sibling->header.key_count = sibling_count;
             original->header.key_count = split_index;
 
-            // 2. Stats: Total Keys (Approximate Split)
+            // 7. Update Stats: Total Keys (Approximate Split)
             int32_t right_total = old_total / 2;
             int32_t left_total = old_total - right_total;
 
             original->header.total_keys = left_total;
             sibling->header.total_keys = right_total;
 
-            // 3. LOGICAL FLOOR FIX
+            // 8. LOGICAL FLOOR FIX (Force Minimum Consistency)
+            // Ensure total_keys >= children * 5
             int32_t min_left = original->header.key_count * 5;
             int32_t min_right = sibling->header.key_count * 5;
 
-            if (original->header.total_keys < min_left) original->header.total_keys = min_left;
-            if (sibling->header.total_keys < min_right) sibling->header.total_keys = min_right;
+            if (original->header.total_keys < min_left)  original->header.total_keys = min_left;
+            if (sibling->header.total_keys < min_right)  sibling->header.total_keys = min_right;
 
-            // 4. Stats: Min/Max Boundaries
+            // 9. Update Stats: Min/Max Boundaries
             original->header.min_key = (old_min < out_result->promoted_key) ? old_min : original->keys[0];
             original->header.max_key = out_result->promoted_key;
 
             sibling->header.min_key = out_result->promoted_key;
+
             if (sibling_count > 0) {
                 KeyType last_key = sibling->keys[sibling_count - 1];
                 sibling->header.max_key = (old_max > out_result->promoted_key) ? old_max : last_key;
@@ -324,18 +344,22 @@ namespace cmse::adapter {
                 sibling->header.max_key = old_max;
             }
 
-            // 5. Density (Recalc)
+            // 10. Update Stats: Density
             auto calcDensity = [](BPlusNodeHeader& h) {
                 if (h.max_key >= h.min_key) {
                     double r = (double)(h.max_key - h.min_key) + 1.0;
-                    h.density = (r > 0) ? static_cast<float>(h.total_keys / r) : 0;
+                    h.density = (r > 0) ? static_cast<float>(h.total_keys / r) : 0.0f;
                 }
-                else h.density = 0;
+                else {
+                    h.density = 0.0f;
+                }
                 };
+
             calcDensity(original->header);
             calcDensity(sibling->header);
         }
 
+        // Finalize
         out_result->did_split = true;
         syncPageHeader(node_to_split);
         syncPageHeader(new_right_page);

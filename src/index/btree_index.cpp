@@ -2,23 +2,13 @@
 #include "bufferpool/buffer_pool_manager.h"
 #include "page/page.h"
 
+#include <functional>
 #include <iostream>
 #include <algorithm> 
 
 namespace cmse::index {
 
-    // -------------------------------------------------------------------------
-    // TraversalContext Implementation
-    // -------------------------------------------------------------------------
 
-    void BTreeIndex::TraversalContext::UnpinAll(cmse::bufferpool::BufferPoolManager* bpm, bool dirty) {
-        for (cmse::Page* p : path_pages) {
-            if (p != nullptr) {
-                bpm->UnpinPage(p->GetPageId(), dirty);
-            }
-        }
-        path_pages.clear();
-    }
 
     // -------------------------------------------------------------------------
     // BTreeIndex Implementation
@@ -30,70 +20,43 @@ namespace cmse::index {
     }
 
     bool BTreeIndex::Insert(const KeyType& key, const ValueType& value) {
-        // --- LAZY INITIALIZATION START ---
-        if (root_page_id_ == INVALID_PAGE_ID) {
-            StartNewTree(key, value);
-            return true;
-        }
-        // --- LAZY INITIALIZATION END ---
-
+        // ... (Lazy Init and Lock code same as before) ...
         std::lock_guard<std::mutex> lock(latch_);
 
         int attempts = 0;
-        const int MAX_ATTEMPTS = 5; // Safety limit to prevent infinite loops
+        const int MAX_ATTEMPTS = 5;
 
-        // Retry loop: If a split occurs, we loop back to find the correct leaf again
-        // and insert the key into the newly available space.
         while (attempts < MAX_ATTEMPTS) {
-
-            // Case 1: Tree is empty, create the first root
             if (root_page_id_ == INVALID_PAGE_ID) {
                 StartNewTree(key, value);
                 return true;
             }
 
-            // Case 2: Traverse to find the correct leaf node
             TraversalContext ctx;
-            cmse::Page* leaf_page = FindLeaf(key, ctx, true); // for_write = true
+            PageGuard leaf_guard = FindLeaf(key, ctx, true);
 
-            if (leaf_page == nullptr) {
-                std::cerr << "[BTreeIndex] Error: Could not find leaf for key " << key << std::endl;
-                return false;
-            }
+            if (!leaf_guard.IsValid()) return false;
 
             // Case 3: Try to insert into the leaf
-            if (adapter_.applyUpdateToLeaf(leaf_page, key, value)) {
-                // Success! The key fit into the page.
-                
-                // --- [NEW ADDITION] ---
-                // The Leaf is updated and clean (applyUpdateToLeaf calls updateStatistics).
-                // BUT, the Ancestors (Parent, Root) are now stale (Lazy Update).
-                // We must mark them as DIRTY so we don't prune incorrectly later.
-                for (auto* page : ctx.path_pages) {
-                    // Don't mark the leaf itself (it's clean)
-                    if (page->GetPageId() != leaf_page->GetPageId()) {
-                        adapter_.setDirty(page);
-                    }
-                }
-                // Unpin all pages in the path and mark leaf as dirty.
-                ctx.UnpinAll(bpm_, true);
-                return true;
+            if (adapter_.applyUpdateToLeaf(leaf_guard.Get(), key, value)) {
+
+                // --- CRITICAL FIX START ---
+                // Update the Min/Max/Total stats of all ancestors (Parent -> Root).
+                // If we don't do this, GetValue() will PRUNE valid keys!
+                UpdateStatsUpwards(ctx, key);
+                // --------------------------
+
+                leaf_guard.SetDirty(true);
+                return true; // Guards unpin automatically
             }
 
-            // Case 4: Leaf is full, split is required.
-            // HandleSplit will split the node and unpin all pages involved.
-            HandleSplit(leaf_page, ctx);
-
-            // CRITICAL FIX:
-            // We do NOT return true here anymore.
-            // We must loop back (continue) to re-invoke FindLeaf and insert the pending key.
-            // The key (e.g., 140) was NOT inserted yet, we only made space for it.
+            // Case 4: Split
+            HandleSplit(std::move(leaf_guard), ctx);
             attempts++;
         }
-
-        std::cerr << "[BTreeIndex] Fatal Error: Insert failed after " << MAX_ATTEMPTS << " split attempts." << std::endl;
         return false;
     }
+
     // -------------------------------------------------------------------------
         // Phase 3: Point Lookup with Pruning
         // -------------------------------------------------------------------------
@@ -102,299 +65,306 @@ namespace cmse::index {
 
         if (root_page_id_ == INVALID_PAGE_ID) return false;
 
-        // --- OPTIMIZATION: Root Level Pruning ---
-        // We fetch the root page to check its global statistics.
-        // If the key is outside [min_key, max_key], we know for sure it doesn't exist.
-        // This effectively turns O(log N) into O(1) for out-of-bounds keys.
-        cmse::Page* root_page = bpm_->FetchPage(root_page_id_);
-        if (root_page != nullptr) {
-            auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_page->GetData());
+        // --- OPTIMIZATION: Root Level Pruning (Safe Version) ---
+        {
+            PageGuard root_guard(bpm_, bpm_->FetchPage(root_page_id_));
+            if (root_guard.IsValid()) {
+                auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_guard.Get()->GetData());
 
-            // Check if statistics are initialized (total_keys > 0)
-            if (header->total_keys > 0) {
-                if (key < header->min_key || key > header->max_key) {
-                    // PRUNED: Key is out of global bounds.
-                    bpm_->UnpinPage(root_page_id_, false);
-                    return false;
+                // Check if global stats allow us to skip
+                if (header->total_keys > 0) {
+                    if (key < header->min_key || key > header->max_key) {
+                        return false; // AUTOMATIC UNPIN (root_guard dies here)
+                    }
                 }
             }
-            // Always unpin after peeking
-            bpm_->UnpinPage(root_page_id_, false);
-        }
-        // ----------------------------------------
+        } // root_guard dies here, releasing the pin before we traverse.
+        // -------------------------------------------------------
 
         TraversalContext ctx;
-        // Proceed with standard traversal if not pruned
-        cmse::Page* leaf_page = FindLeaf(key, ctx, false);
+        // FindLeaf returns a Guard now. No manual unpin needed.
+        PageGuard leaf_guard = FindLeaf(key, ctx, false);
 
-        if (leaf_page == nullptr) return false;
+        if (!leaf_guard.IsValid()) return false;
 
-        auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(leaf_page->GetData());
+        auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(leaf_guard.Get()->GetData());
         int count = leaf->header.key_count;
-        bool found = false;
 
-        // Linear scan inside the leaf to find the exact key match
+        // Linear scan inside the leaf
         for (int i = 0; i < count; ++i) {
             if (leaf->keys[i] == key) {
                 result = leaf->values[i];
-                found = true;
-                break;
+                return true; // AUTOMATIC UNPIN (leaf_guard dies here)
             }
         }
 
-        ctx.UnpinAll(bpm_, false);
-        return found;
+        return false; // AUTOMATIC UNPIN
     }
 
-    // -------------------------------------------------------------------------
-        // Phase 3: Range Scan with Pruning
-        // -------------------------------------------------------------------------
     std::vector<ValueType> BTreeIndex::Scan(const KeyType& start_key, const KeyType& end_key) {
         std::lock_guard<std::mutex> lock(latch_);
         std::vector<ValueType> results;
 
         if (root_page_id_ == INVALID_PAGE_ID) return results;
 
-        // --- OPTIMIZATION: Root Level Pruning ---
-        // Check if the requested range [start, end] overlaps with the tree [min, max].
-        cmse::Page* root_page = bpm_->FetchPage(root_page_id_);
-        if (root_page != nullptr) {
-            auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_page->GetData());
+        // --- OPTIMIZATION: Root Level Pruning (Safe Version) ---
+        {
+            PageGuard root_guard(bpm_, bpm_->FetchPage(root_page_id_));
+            if (root_guard.IsValid()) {
+                auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(root_guard.Get()->GetData());
 
-            // If is_dirty is 1, we CANNOT trust min/max, so we MUST NOT prune.
-            if (header->total_keys > 0 && header->is_dirty == 0) {
-                // Case 1: Requested range is strictly to the left of the tree
-                // Case 2: Requested range is strictly to the right of the tree
-                if (end_key < header->min_key || start_key > header->max_key) {
-                    // PRUNED: No overlap possible.
-                    bpm_->UnpinPage(root_page_id_, false);
-                    return results;
+                // Only trust stats if the node is clean
+                if (header->total_keys > 0 && header->is_dirty == 0) {
+                    if (end_key < header->min_key || start_key > header->max_key) {
+                        return results; // AUTOMATIC UNPIN
+                    }
                 }
             }
-            bpm_->UnpinPage(root_page_id_, false);
         }
-        // ----------------------------------------
+        // -------------------------------------------------------
 
-        // 1. Find the starting leaf page using standard traversal
+        // 1. Find the starting leaf safe
         TraversalContext ctx;
-        cmse::Page* curr_page = FindLeaf(start_key, ctx, false);
+        PageGuard curr_guard = FindLeaf(start_key, ctx, false);
 
-        if (curr_page == nullptr) return results;
+        if (!curr_guard.IsValid()) return results;
 
-        // Detach leaf from context to manage unpinning manually during horizontal scan
-        ctx.path_pages.pop_back();
-        ctx.UnpinAll(bpm_, false); // Unpins all ancestors
-
-        // --- SAFETY
+        // --- SAFETY LOOP ---
         int scanned_pages = 0;
         const int MAX_SCAN_PAGES = 100000;
 
-        // 2. Horizontal Linear Scan (Leaf -> Next Leaf)
-        while (curr_page != nullptr) {
-            // --- SAFETY CHECK ---
+        // 2. Horizontal Linear Scan
+        while (curr_guard.IsValid()) {
+
+            // Safety Break
             scanned_pages++;
             if (scanned_pages > MAX_SCAN_PAGES) {
-                std::cerr << "[FATAL] Infinite Loop detected in Scan! B+Tree Leaf Chain is circular." << std::endl;
-                bpm_->UnpinPage(curr_page->GetPageId(), false);
+                std::cerr << "[FATAL] Infinite Loop detected in Scan!" << std::endl;
                 break;
             }
-            // --------------------
-            auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(curr_page->GetData());
+
+            auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(curr_guard.Get()->GetData());
             int count = leaf->header.key_count;
             page_id_t next_page_id = leaf->next_leaf_id;
+            page_id_t current_id = curr_guard.Get()->GetPageId();
 
-            // Iterate keys in the current leaf
+            // Collect keys
             for (int i = 0; i < count; ++i) {
-                // Optimization: Sorted keys allow early exit
                 if (leaf->keys[i] > end_key) {
-                    bpm_->UnpinPage(curr_page->GetPageId(), false);
-                    return results;
+                    return results; // AUTOMATIC UNPIN of curr_guard
                 }
-
                 if (leaf->keys[i] >= start_key) {
                     results.push_back(leaf->values[i]);
                 }
             }
 
-            // Move to the next leaf in the chain
-            bpm_->UnpinPage(curr_page->GetPageId(), false);
+            // End of chain?
+            if (next_page_id == INVALID_PAGE_ID) break;
 
-            if (next_page_id == INVALID_PAGE_ID) {
-                break; // End of chain
-            }
-
-            // (Self-Cycle)
-            if (next_page_id == curr_page->GetPageId()) {
+            // Loop detection
+            if (next_page_id == current_id) {
                 std::cerr << "[FATAL] Page " << next_page_id << " points to itself!" << std::endl;
                 break;
             }
 
-            // Fetch next leaf from Buffer Pool
-            curr_page = bpm_->FetchPage(next_page_id);
+            // --- MOVE TO NEXT PAGE ---
+            // 1. Fetch next page into a temporary guard
+            // 2. Use Move Assignment to update curr_guard
+            //    (This automatically Unpins the old page safely)
+            curr_guard = PageGuard(bpm_, bpm_->FetchPage(next_page_id));
         }
 
-        return results;
+        return results; // AUTOMATIC UNPIN
     }
 
     void BTreeIndex::StartNewTree(const KeyType& key, const ValueType& value) {
-        page_id_t new_root_id;
-        cmse::Page* root_page = bpm_->NewPage(new_root_id);
+        page_id_t root_id;
+        // Wrap new page immediately
+        PageGuard root_guard(bpm_, bpm_->NewPage(root_id));
 
-        if (root_page == nullptr) {
-            std::cerr << "[BTreeIndex] Failed to allocate root page!" << std::endl;
-            return;
-        }
+        if (!root_guard.IsValid()) return;
 
-        adapter_.initLeaf(root_page);
-        adapter_.applyUpdateToLeaf(root_page, key, value);
-        root_page_id_ = new_root_id;
+        adapter_.initLeaf(root_guard.Get());
 
-        bpm_->UnpinPage(root_page_id_, true);
-        std::cout << "[Index] Created new B+Tree Root at PageID: " << root_page_id_ << std::endl;
+        adapter_.applyUpdateToLeaf(root_guard.Get(), key, value);
+
+        root_page_id_ = root_id;
+
+        // Mark dirty so it writes to disk
+        root_guard.SetDirty(true);
+
+        // Destructor runs here -> Unpins Root automatically
     }
 
-    cmse::Page* BTreeIndex::FindLeaf(const KeyType& key, TraversalContext& ctx, bool for_write) {
-        page_id_t next_leaf_id = root_page_id_;
-        cmse::Page* curr_page = nullptr;
+    PageGuard BTreeIndex::FindLeaf(const KeyType& key, TraversalContext& ctx, bool for_write) {
+        // 1. Fetch Root safely
+        PageGuard curr_guard(bpm_, bpm_->FetchPage(root_page_id_));
 
-        // --- SAFETY
-        int depth = 0;
-        const int MAX_DEPTH = 50; 
-
-        // -------------------------------
-        while (true) {
-
-            // --- SAFETY CHECK ---
-            if (depth++ > MAX_DEPTH) {
-                std::cerr << "[FATAL] Infinite Loop in FindLeaf! Routing broken." << std::endl;
-                if (curr_page) bpm_->UnpinPage(curr_page->GetPageId(), false);
-                ctx.UnpinAll(bpm_, false);
-                return nullptr;
-            }
-            // --------------------
-            curr_page = bpm_->FetchPage(next_leaf_id);
-            if (curr_page == nullptr) {
-                std::cerr << "[BTreeIndex] Failed to fetch page " << next_leaf_id << std::endl;
-                ctx.UnpinAll(bpm_, false);
-                return nullptr;
-            }
-
-            ctx.path_pages.push_back(curr_page);
-
-            if (adapter_.isLeaf(curr_page)) {
-                return curr_page;
-            }
-
-            next_leaf_id = adapter_.findChild(curr_page, key);
+        if (!curr_guard.IsValid()) {
+            return {}; // Return empty guard (safe null)
         }
+
+        // 2. Traversal Loop
+        while (!adapter_.isLeaf(curr_guard.Get())) {
+
+            // Save current parent to stack (MOVE ownership to stack)
+            // We create a NEW guard for the stack because we need to keep the parent pinned
+            // if we are "tracing" (for_write=true).
+
+            if (for_write) {
+                // For stack, we need a separate pin or move. 
+                // Since FetchPage increments pin count once, and we want to keep it:
+                // We move the current guard into the stack.
+                Page* raw_ptr = curr_guard.Get();
+                ctx.path_pages.push_back(std::move(curr_guard));
+
+                // Now calculate next child using the raw pointer (safe, stack holds pin)
+                page_id_t next_id = adapter_.findChild(raw_ptr, key);
+
+                // Fetch next
+                curr_guard = PageGuard(bpm_, bpm_->FetchPage(next_id));
+            }
+            else {
+                // Read-only mode: We don't need to keep parents pinned.
+                // We can drop the current one before fetching the next.
+                page_id_t next_id = adapter_.findChild(curr_guard.Get(), key);
+                curr_guard.Drop(); // Unpin current
+
+                curr_guard = PageGuard(bpm_, bpm_->FetchPage(next_id));
+            }
+
+            if (!curr_guard.IsValid()) return {};
+        }
+
+        return curr_guard; // Transfer ownership of the leaf to caller
     }
 
-    void BTreeIndex::HandleSplit(cmse::Page* node, TraversalContext& ctx) {
+    void BTreeIndex::HandleSplit(PageGuard node_guard, TraversalContext& ctx) {
 
-        // Variables to track what needs to be inserted into the parent
-        cmse::Page* current_node = node;
-        page_id_t current_id = node->GetPageId();
+        // We hold 'node_guard' (The child). It is pinned.
+        cmse::Page* current_node = node_guard.Get();
+        page_id_t current_id = current_node->GetPageId();
 
-        // Initial Split: We split the node that overflowed (Leaf or Internal)
+        // 1. Create Sibling Safe
         page_id_t sibling_id;
-        cmse::Page* sibling_page = bpm_->NewPage(sibling_id);
-        if (sibling_page == nullptr) {
-            ctx.UnpinAll(bpm_, false);
-            return;
-        }
+        PageGuard sibling_guard(bpm_, bpm_->NewPage(sibling_id));
+        if (!sibling_guard.IsValid()) return;
 
+        // 2. Perform Split (Leaf or Internal)
         cmse::adapter::SplitResult result;
-        adapter_.splitNode(current_node, sibling_page, &result);
+        adapter_.splitNode(current_node, sibling_guard.Get(), &result);
 
-        // Remove current node from path trace
-        ctx.path_pages.pop_back();
-
-        // Data to propagate upwards
+        // Prepare propagation data
         KeyType key_to_insert = result.promoted_key;
         page_id_t child_val_to_insert = sibling_id;
 
-        // Unpin children (we only need their IDs now)
-        bpm_->UnpinPage(current_id, true);
-        bpm_->UnpinPage(sibling_id, true);
+        // Mark both dirty
+        node_guard.SetDirty(true);
+        sibling_guard.SetDirty(true);
+
+        // We can drop the guards now. We only need the Page IDs for the parent.
+        // (If we kept them pinned, we would deadlock when trying to fetch the parent in some designs)
+        node_guard.Drop();
+        sibling_guard.Drop();
 
         // ==========================================================
         // Iterative Upward Propagation
         // ==========================================================
         while (true) {
 
-            // Case 1: Reached Root (No Parent) -> Create New Root
+            // ---------------------------------------------------------
+            // CASE 1: SPLITTING THE ROOT (Create New Root)
+            // ---------------------------------------------------------
             if (ctx.path_pages.empty()) {
                 page_id_t new_root_id;
-                cmse::Page* new_root = bpm_->NewPage(new_root_id);
+                PageGuard new_root_guard(bpm_, bpm_->NewPage(new_root_id));
+                if (!new_root_guard.IsValid()) return;
 
-                // New Root points to: [OldRoot (current_id)] [Key] [NewChild (child_val_to_insert)]
-                adapter_.createNewRoot(new_root, current_id, child_val_to_insert, key_to_insert);
+                // Initialize pointers: [OldRoot] [Key] [NewChild]
+                adapter_.createNewRoot(new_root_guard.Get(), current_id, child_val_to_insert, key_to_insert);
 
-                // Update stats for the new root
-                adapter_.updateStatistics(new_root);
+                // --- RESTORED: Phase 3 Exact Statistics ---
+                // We must re-fetch the children briefly to sum their stats safely
+                {
+                    PageGuard left_child(bpm_, bpm_->FetchPage(current_id));
+                    PageGuard right_child(bpm_, bpm_->FetchPage(child_val_to_insert));
 
+                    if (left_child.IsValid() && right_child.IsValid()) {
+                        auto* root_h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_root_guard.Get()->GetData());
+                        auto* left_h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(left_child.Get()->GetData());
+                        auto* right_h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(right_child.Get()->GetData());
+
+                        // 1. Sum Total Keys (Exact)
+                        root_h->total_keys = left_h->total_keys + right_h->total_keys;
+
+                        // 2. Set Min/Max Boundaries
+                        root_h->min_key = left_h->min_key;
+                        root_h->max_key = right_h->max_key;
+
+                        // 3. Recalculate Density
+                        if (root_h->max_key >= root_h->min_key) {
+                            double range = (double)(root_h->max_key - root_h->min_key) + 1.0;
+                            if (range > 0) {
+                                root_h->density = (float)((double)root_h->total_keys / range);
+                            }
+                            else {
+                                root_h->density = 1.0f;
+                            }
+                        }
+                        else {
+                            root_h->density = 0.0f;
+                        }
+                    }
+                } // Children unpin here automatically
+                // ---------------------------------------------------------
+
+                new_root_guard.SetDirty(true);
                 this->root_page_id_ = new_root_id;
-                bpm_->UnpinPage(new_root_id, true);
                 return; // Done
             }
 
-            // Case 2: Parent exists
-            cmse::Page* parent = ctx.path_pages.back();
+            // ---------------------------------------------------------
+            // CASE 2: PARENT EXISTS
+            // ---------------------------------------------------------
+            // Get Parent from Stack (Move ownership)
+            PageGuard parent_guard = std::move(ctx.path_pages.back());
+            ctx.path_pages.pop_back();
 
-            // Try to insert into Parent
-            if (adapter_.insertIntoInternal(parent, key_to_insert, child_val_to_insert)) {
-                // Success! Parent had space.
-                ctx.UnpinAll(bpm_, true);
-                return; // Done
+            // Try Insert into Parent
+            if (adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert)) {
+                parent_guard.SetDirty(true);
+                return; // Success, all guards unpin automatically
             }
 
-            // Case 3: Parent is FULL -> Must Split Parent
-            // We split here locally instead of recursion to ensure we don't drop the key.
+            // ---------------------------------------------------------
+            // CASE 3: PARENT IS FULL -> SPLIT PARENT
+            // ---------------------------------------------------------
+            page_id_t p_sibling_id;
+            PageGuard p_sibling_guard(bpm_, bpm_->NewPage(p_sibling_id));
+            if (!p_sibling_guard.IsValid()) return;
 
-            page_id_t parent_sibling_id;
-            cmse::Page* parent_sibling = bpm_->NewPage(parent_sibling_id);
-            if (parent_sibling == nullptr) {
-                ctx.UnpinAll(bpm_, false);
-                return;
-            }
+            cmse::adapter::SplitResult p_result;
+            adapter_.splitNode(parent_guard.Get(), p_sibling_guard.Get(), &p_result);
 
-            cmse::adapter::SplitResult parent_split_res;
-            adapter_.splitNode(parent, parent_sibling, &parent_split_res);
-
-            // CRITICAL FIX: The "Dropped Key" Prevention
-            // The parent just split. We still have 'key_to_insert' (from the child) pending.
-            // We must decide which half (Parent or ParentSibling) should take it.
-
-            if (key_to_insert >= parent_split_res.promoted_key) {
-                // Insert into New Right Parent
-                adapter_.insertIntoInternal(parent_sibling, key_to_insert, child_val_to_insert);
+            // "Dropped Key" Fix: Insert the pending key into the correct half
+            if (key_to_insert >= p_result.promoted_key) {
+                adapter_.insertIntoInternal(p_sibling_guard.Get(), key_to_insert, child_val_to_insert);
             }
             else {
-                // Insert into Old Left Parent
-                adapter_.insertIntoInternal(parent, key_to_insert, child_val_to_insert);
+                adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert);
             }
 
-            // Setup for next iteration (Move up to Grandparent)
-            current_id = parent->GetPageId();                 // Old Parent becomes the child
-            child_val_to_insert = parent_sibling_id;          // Parent Sibling becomes the value to insert
-            key_to_insert = parent_split_res.promoted_key;    // The key promoted from Parent becomes the key to insert
+            // Prepare variables for the next iteration (Grandparent becomes Parent)
+            current_id = parent_guard.Get()->GetPageId();
+            child_val_to_insert = p_sibling_id;
+            key_to_insert = p_result.promoted_key;
 
-            // Unpin current level pages
-            bpm_->UnpinPage(parent->GetPageId(), true);
-            bpm_->UnpinPage(parent_sibling_id, true);
+            // Mark Dirty
+            parent_guard.SetDirty(true);
+            p_sibling_guard.SetDirty(true);
 
-            // Pop stack to move to Grandparent
-            ctx.path_pages.pop_back();
+            // Loop continues... Guards (parent & sibling) die here, unpinning the pages.
         }
-    }
-    void BTreeIndex::PrintTree(int limit_depth) {
-        std::cout << "\n=== B+Tree Visualization (Root: " << root_page_id_ << ") ===\n";
-        if (root_page_id_ == INVALID_PAGE_ID) {
-            std::cout << "(Empty Tree)\n";
-            return;
-        }
-        PrintNode(root_page_id_, 0, limit_depth, "");
-        std::cout << "===============================================\n";
     }
 
     // -------------------------------------------------------------------------
@@ -453,19 +423,23 @@ namespace cmse::index {
     }
 
     void BTreeIndex::UpdateStatsUpwards(TraversalContext& ctx, const KeyType& key) {
+        // Iterate backwards (Leaf -> Root)
         for (auto it = ctx.path_pages.rbegin(); it != ctx.path_pages.rend(); ++it) {
-            cmse::Page* page = *it;
-            if (page == nullptr) continue;
 
+            // 'it' is now a PageGuard, not a Page*
+            if (!it->IsValid()) continue;
+
+            cmse::Page* page = it->Get();
             auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(page->GetData());
 
             if (header->is_leaf) {
                 adapter_.updateStatistics(page);
             }
             else {
-                // INTERNAL NODES
+                // INTERNAL NODES logic
                 if (header->total_keys == 0 || (header->min_key > header->max_key)) {
-                    header->min_key = key; header->max_key = key;
+                    header->min_key = key;
+                    header->max_key = key;
                 }
                 else {
                     if (key < header->min_key) header->min_key = key;
@@ -475,7 +449,6 @@ namespace cmse::index {
                 header->total_keys++;
 
                 // --- FORCE LOGICAL CONSISTENCY ---
-                // Rule: Total keys >= Number of Children * 5
                 int32_t min_logical = header->key_count * 5;
                 if (header->total_keys < min_logical) {
                     header->total_keys = min_logical;
@@ -484,42 +457,99 @@ namespace cmse::index {
 
                 if (header->max_key >= header->min_key) {
                     double range = (double)(header->max_key - header->min_key) + 1.0;
-                    if (range > 0) header->density = (float)((double)header->total_keys / range);
+                    if (range > 0) {
+                        header->density = (float)((double)header->total_keys / range);
+                    }
                 }
             }
-        }
 
+            // IMPORTANT: Mark the page as dirty via the Guard
+            it->SetDirty(true);
+        }
     }
 
     BTreeIterator BTreeIndex::Begin(const KeyType& start_key) {
         std::lock_guard<std::mutex> lock(latch_);
 
         if (root_page_id_ == INVALID_PAGE_ID) {
-            return BTreeIterator(bpm_, &adapter_, nullptr, 0);
+            // Return empty iterator
+            return BTreeIterator(bpm_, &adapter_, PageGuard(), 0);
         }
 
-        // 1. Find the starting leaf
+        // 1. Find the starting leaf safely
         TraversalContext ctx;
-        cmse::Page* leaf_page = FindLeaf(start_key, ctx, false);
 
-        // ctx holds the stack (Parent, Grandparent). We MUST unpin them now,
-        // because the Iterator only cares about the Leaf.
-        ctx.path_pages.pop_back(); // Remove leaf from stack (so we don't unpin it yet)
-        ctx.UnpinAll(bpm_, false); // Unpin ancestors
+        // FindLeaf returns a PageGuard.
+        // Note: Since we use for_write=false, ancestors are already unpinned/dropped 
+        // by FindLeaf, so 'ctx' stack is empty. We only hold the leaf.
+        PageGuard leaf_guard = FindLeaf(start_key, ctx, false);
 
-        if (leaf_page == nullptr) {
-            return BTreeIterator(bpm_, &adapter_, nullptr, 0);
+        if (!leaf_guard.IsValid()) {
+            return BTreeIterator(bpm_, &adapter_, PageGuard(), 0);
         }
 
         // 2. Find start index within the leaf
-        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(leaf_page->GetData());
+        auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(leaf_guard.Get()->GetData());
         int index = 0;
         while (index < leaf->header.key_count && leaf->keys[index] < start_key) {
             index++;
         }
 
-        // 3. Return Iterator (It takes ownership of leaf_page pinning)
-        return BTreeIterator(bpm_, &adapter_, leaf_page, index);
+        // 3. Return Iterator by MOVING the guard
+        // We pass std::move(leaf_guard) so the Iterator takes the pin.
+        return BTreeIterator(bpm_, &adapter_, std::move(leaf_guard), index);
     }
 
+    // -------------------------------------------------------------------------
+//  Debug / Visualization
+// -------------------------------------------------------------------------
+    void BTreeIndex::PrintTree(int limit) {
+        std::lock_guard<std::mutex> lock(latch_);
+        if (root_page_id_ == INVALID_PAGE_ID) {
+            std::cout << "[Empty Tree]" << std::endl;
+            return;
+        }
+
+        // Helper Lambda for recursive printing
+        std::function<void(page_id_t, int)> print_node =
+            [&](page_id_t page_id, int depth) {
+
+            if (depth > 10) return; // Safety depth limit
+
+            PageGuard guard(bpm_, bpm_->FetchPage(page_id));
+            if (!guard.IsValid()) return;
+
+            auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(guard.Get()->GetData());
+
+            // Indentation
+            std::string indent(depth * 4, ' ');
+
+            if (header->is_leaf) {
+                auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(guard.Get()->GetData());
+                std::cout << indent << "[Leaf " << page_id << "] Keys: " << header->key_count
+                    << " | Next: " << leaf->next_leaf_id << " -> ";
+
+                // Print first few keys
+                int print_k = std::min((int)header->key_count, limit);
+                for (int i = 0; i < print_k; i++) {
+                    std::cout << leaf->keys[i] << ",";
+                }
+                if (header->key_count > limit) std::cout << "...";
+                std::cout << std::endl;
+            }
+            else {
+                auto* internal = reinterpret_cast<cmse::adapter::BPlusInternalNode*>(guard.Get()->GetData());
+                std::cout << indent << "[Internal " << page_id << "] Keys: " << header->key_count << std::endl;
+
+                // Recursively print children
+                // Internal node has (key_count + 1) children
+                for (int i = 0; i <= header->key_count; i++) {
+                    print_node(internal->children[i], depth + 1);
+                }
+            }
+            };
+
+        // Start printing from root
+        print_node(root_page_id_, 0);
+    }
 } // namespace cmse::index

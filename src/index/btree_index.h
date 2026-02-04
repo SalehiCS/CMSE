@@ -7,6 +7,7 @@
 #include "common/types.h"
 #include "adapter/btree_adapter.h"
 #include "btree_iterator.h"
+#include "../bufferpool/page_guard.h"
 
 namespace cmse {
     class Page;
@@ -21,6 +22,8 @@ namespace cmse::index {
     public:
         BTreeIndex(cmse::bufferpool::BufferPoolManager* bpm, page_id_t root_id = INVALID_PAGE_ID);
 
+
+
         // --- Core API ---
         bool Insert(const KeyType& key, const ValueType& value);
         bool GetValue(const KeyType& key, ValueType& result);
@@ -32,11 +35,13 @@ namespace cmse::index {
         page_id_t GetRootPageId() const { return root_page_id_; }
 
         // --- Visualizer API ---
-        void PrintTree(int limit_depth = 3);
+        void PrintTree(int limit = 10);
 
         void SetRootPageId(page_id_t root_id) { root_page_id_ = root_id; }
         
         BTreeIterator Begin(const KeyType& start_key);
+
+        
 
     private:
         cmse::bufferpool::BufferPoolManager* bpm_;
@@ -44,13 +49,25 @@ namespace cmse::index {
         page_id_t root_page_id_;
         std::mutex latch_;
 
+        // RAII Wrapper for the traversal stack
         struct TraversalContext {
-            std::vector<cmse::Page*> path_pages;
-            void UnpinAll(cmse::bufferpool::BufferPoolManager* bpm, bool dirty);
+            std::vector<PageGuard> path_pages; // <--- Changed from Page* to PageGuard
+
+            // Mark all pages in the stack as dirty (Used on successful insert)
+            void SetAllDirty(bool dirty) {
+                for (auto& guard : path_pages) {
+                    guard.SetDirty(dirty);
+                }
+            }
+
+            // UnpinAll is no longer needed! The vector destructor handles it.
         };
 
-        cmse::Page* FindLeaf(const KeyType& key, TraversalContext& ctx, bool for_write);
-        void HandleSplit(cmse::Page* node, TraversalContext& ctx);
+        // Updated Signatures
+        // FindLeaf now returns a Guard instead of a raw pointer
+        PageGuard FindLeaf(const KeyType& key, TraversalContext& ctx, bool for_write);
+
+        void HandleSplit(PageGuard node_guard, TraversalContext& ctx); // Updated
         void StartNewTree(const KeyType& key, const ValueType& value);
 
         // --- Helper for Visualization ---

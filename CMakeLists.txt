@@ -118,11 +118,18 @@ target_link_libraries(tree_visualizer PRIVATE cmse_core)
 # Range Scan Test
 add_executable(range_scan_test tests/range_scan_test.cpp)
 target_link_libraries(range_scan_test cmse_core)
+add_test(NAME RangeScanTest COMMAND range_scan_test) # <--- ADDED THIS
 
 # Trie Index Test
 add_executable(trie_test tests/trie_test.cpp)
 target_link_libraries(trie_test PRIVATE cmse_core)
 add_test(NAME TrieTest COMMAND trie_test)
+
+# =========================================================
+#  INTERACTIVE TOOLS (Build Only - Do NOT add to CTest)
+#  These tools wait for user input (cin). If you add_test
+#  for them, your test suite will HANG forever!
+# =========================================================
 
 add_executable(query_runner tests/query_runner.cpp)
 target_link_libraries(query_runner PRIVATE cmse_core)
@@ -130,20 +137,29 @@ target_link_libraries(query_runner PRIVATE cmse_core)
 add_executable(trie_visualizer tests/trie_visualizer.cpp)
 target_link_libraries(trie_visualizer PRIVATE cmse_core)
 
-add_executable(debug_search tests/debug_search.cpp)
-target_link_libraries(debug_search PRIVATE cmse_core)
-
-add_executable(integrity_check tests/integrity_check.cpp)
-target_link_libraries(integrity_check PRIVATE cmse_core)
-
 add_executable(btree_visualizer tests/btree_visualizer.cpp)
 target_link_libraries(btree_visualizer PRIVATE cmse_core)
+
+add_executable(debug_search tests/debug_search.cpp)
+target_link_libraries(debug_search PRIVATE cmse_core)
 
 add_executable(debug_path tests/debug_path.cpp)
 target_link_libraries(debug_path PRIVATE cmse_core)
 
+
+add_executable(db_pager tests/db_pager.cpp)
+target_link_libraries(db_pager PRIVATE cmse_core)
+
+
+# =========================================================
+#  AUTOMATED TESTS (Add to CTest)
+#  These run automatically and return Pass/Fail.
+# =========================================================
+
+add_executable(integrity_check tests/integrity_check.cpp)
+target_link_libraries(integrity_check PRIVATE cmse_core)
+add_test(NAME IntegrityCheck COMMAND integrity_check) # <--- ADDED THIS
+
 add_executable(btree_iterator_test tests/btree_iterator_test.cpp)
 target_link_libraries(btree_iterator_test PRIVATE cmse_core)
-
-add_executable(db_pager tests/db_pager.cpp src/index/btree_iterator.cpp)
-target_link_libraries(db_pager PRIVATE cmse_core)
+add_test(NAME BTreeIteratorTest COMMAND btree_iterator_test) # <--- ADDED THIS

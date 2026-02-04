@@ -1,5 +1,6 @@
 #pragma once
 #include "../bufferpool/buffer_pool_manager.h"
+#include "../bufferpool/page_guard.h"
 #include "../adapter/btree_adapter.h"
 #include "../common/types.h"
 
@@ -7,11 +8,19 @@ namespace cmse {
 
     class BTreeIterator {
     public:
-        // Constructor: Takes ownership of the starting page (it must be PINNED)
+        // Constructor that accepts an existing PageGuard (Move Ownership)
         BTreeIterator(bufferpool::BufferPoolManager* bpm,
             adapter::BTreeAdapter* adapter,
-            Page* start_page,
+            PageGuard&& start_guard, // <--- Accepts Guard
             int start_index);
+
+        // --- NEW: Enable Move Semantics ---
+        BTreeIterator(BTreeIterator&& other) noexcept;            // Move Constructor
+        BTreeIterator& operator=(BTreeIterator&& other) noexcept; // Move Assignment
+
+        // DISABLE COPY (Because PageGuard cannot be copied)
+        BTreeIterator(const BTreeIterator&) = delete;
+        BTreeIterator& operator=(const BTreeIterator&) = delete;
 
         // Destructor: Automatically unpins the held page
         ~BTreeIterator();
@@ -31,7 +40,7 @@ namespace cmse {
     private:
         bufferpool::BufferPoolManager* bpm_;
         adapter::BTreeAdapter* adapter_;
-        Page* curr_page_;
+        PageGuard curr_guard_;
         int curr_index_;
         bool is_end_;
     };
