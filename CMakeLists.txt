@@ -167,3 +167,8 @@ add_test(NAME BTreeIteratorTest COMMAND btree_iterator_test) # <--- ADDED THIS
 add_executable(btree_cow_test tests/btree_cow_test.cpp)
 target_link_libraries(btree_cow_test PRIVATE cmse_core)
 add_test(NAME BTreeCoWTest COMMAND btree_cow_test)
+
+add_executable(btree_cow_stress_test tests/btree_cow_stress_test.cpp)
+target_link_libraries(btree_cow_stress_test PRIVATE cmse_core)
+add_test(NAME BTreeCoWStressTest COMMAND btree_cow_test)
+
