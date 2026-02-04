@@ -51,9 +51,11 @@ namespace cmse::adapter {
 
         leaf->header.total_keys = 0; // <--- Add this
         
+        updateStatistics(page);      // <--- Call update to set defaults
+
         syncPageHeader(page);
 
-        updateStatistics(page);      // <--- Call update to set defaults
+        
     }
 
     void BTreeAdapter::initInternal(Page* page) {
@@ -66,10 +68,10 @@ namespace cmse::adapter {
         internal->header.density = 0.0f;
 
         internal->header.total_keys = 0; // <--- Add this
-
+        updateStatistics(page);      // <--- Call update to set defaults
         syncPageHeader(page);
 
-        updateStatistics(page);      // <--- Call update to set defaults
+        
     }
 
     // -------------------------------------------------------------------------
@@ -144,10 +146,10 @@ namespace cmse::adapter {
         leaf->keys[index] = key;
         leaf->values[index] = val; // Copy assignment of LogRecord
         leaf->header.key_count++;
-
+        updateStatistics(leaf_page);
         syncPageHeader(leaf_page);
 
-        updateStatistics(leaf_page);
+        
 
         return true;
     }
@@ -204,10 +206,10 @@ namespace cmse::adapter {
         internal->keys[index] = key;
         internal->children[index + 1] = right_child_id;
         internal->header.key_count++;
-
+        updateStatistics(internal_page);
         syncPageHeader(internal_page);
 
-        updateStatistics(internal_page);
+        
         return true;
     }
 
@@ -309,7 +311,13 @@ namespace cmse::adapter {
 
             // RIGHT NODE: Range [PromotedKey, OldMax]
             sibling->header.min_key = out_result->promoted_key;
-            sibling->header.max_key = (old_max > out_result->promoted_key) ? old_max : sibling->keys[sibling_count - 1];
+            if (sibling_count > 0) {
+                KeyType last_key = sibling->keys[sibling_count - 1];
+                sibling->header.max_key = (old_max > out_result->promoted_key) ? old_max : last_key;
+            }
+            else {
+                sibling->header.max_key = old_max;
+            }
 
             // 4. Density (Recalc)
             auto calcDensity = [](BPlusNodeHeader& h) {
@@ -336,10 +344,10 @@ namespace cmse::adapter {
         root->children[0] = left_child;
         root->children[1] = right_child;
         root->header.key_count = 1;
-
+        updateStatistics(new_root_page);
         syncPageHeader(new_root_page);
 
-        updateStatistics(new_root_page);
+        
     }
 
     // -------------------------------------------------------------------------
