@@ -235,6 +235,7 @@ namespace cmse::adapter {
             original->header.key_count = split_index;
             sibling->header.key_count = sibling_count;
             sibling->next_leaf_id = original->next_leaf_id;
+            original->next_leaf_id = new_right_page->GetPageId();
 
             // Promote Key
             out_result->promoted_key = sibling->keys[0];

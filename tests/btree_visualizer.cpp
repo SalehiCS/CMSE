@@ -28,7 +28,7 @@ constexpr int SAFETY_MARGIN = 32;
 
 // Calculations must match btree_adapter.h exactly
 constexpr int MAX_KEYS_INTERNAL = (cmse::PAGE_SIZE - HEADER_SIZE - SAFETY_MARGIN) / (sizeof(int64_t) + sizeof(page_id_t));
-constexpr int MAX_KEYS_LEAF = (cmse::PAGE_SIZE - HEADER_SIZE - sizeof(page_id_t) - SAFETY_MARGIN) / (sizeof(int64_t) + 244); // 244 is approx sizeof(LogRecord)
+constexpr int MAX_KEYS_LEAF = (cmse::PAGE_SIZE - HEADER_SIZE - sizeof(page_id_t) - SAFETY_MARGIN) / (sizeof(int64_t) + 280);
 
 struct BPlusInternalNode {
     BPlusNodeHeader header;
