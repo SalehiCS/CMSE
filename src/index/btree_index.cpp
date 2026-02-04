@@ -300,15 +300,12 @@ namespace cmse::index {
         }
 
         cmse::adapter::SplitResult result;
+
+        // EXECUTE SPLIT (This handles the Linked-List connection internally)
         adapter_.splitNode(node, sibling_page, &result);
 
-        // Link Linked-List if Leaf
-        if (adapter_.isLeaf(node)) {
-            auto* left_leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(node->GetData());
-            auto* right_leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(sibling_page->GetData());
-            right_leaf->next_leaf_id = left_leaf->next_leaf_id;
-            left_leaf->next_leaf_id = sibling_id;
-        }
+        // [REMOVED] The "Link Linked-List if Leaf" block that was here.
+        // It caused the self-pointer bug because splitNode already updated the links!
 
         ctx.path_pages.pop_back();
 
@@ -323,8 +320,6 @@ namespace cmse::index {
             adapter_.createNewRoot(new_root, node->GetPageId(), sibling_id, result.promoted_key);
 
             // --- PHASE 3: Exact Statistics Calculation for New Root ---
-            // Since we have both children in memory, we can sum their stats exactly.
-
             auto* root_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_root->GetData());
             auto* left_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(node->GetData());
             auto* right_header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(sibling_page->GetData());
@@ -333,7 +328,6 @@ namespace cmse::index {
             root_header->total_keys = left_header->total_keys + right_header->total_keys;
 
             // 2. Set Min/Max Boundaries
-            // The new root covers the full range of both children.
             root_header->min_key = left_header->min_key;
             root_header->max_key = right_header->max_key;
 
@@ -344,12 +338,15 @@ namespace cmse::index {
                     root_header->density = (float)((double)root_header->total_keys / range);
                 }
                 else {
-                    root_header->density = 1.0f; // Single key case
+                    root_header->density = 1.0f;
                 }
             }
             else {
                 root_header->density = 0.0f;
             }
+
+            // New root is freshly calculated, so it is clean
+            root_header->is_dirty = 0;
             // =============================================================
 
             this->root_page_id_ = new_root_id;
@@ -359,7 +356,7 @@ namespace cmse::index {
             bpm_->UnpinPage(sibling_id, true);
         }
         else {
-            // ... (The rest of HandleSplit / Propagate logic remains unchanged) ...
+            // ... (The rest of Propagate logic) ...
             cmse::Page* parent = ctx.path_pages.back();
             if (adapter_.insertIntoInternal(parent, result.promoted_key, sibling_id)) {
                 bpm_->UnpinPage(node->GetPageId(), true);

@@ -220,6 +220,16 @@ namespace cmse::adapter {
     // -------------------------------------------------------------------------
 
     void BTreeAdapter::splitNode(Page* node_to_split, Page* new_right_page, SplitResult* out_result) {
+
+        // --- SAFETY GUARD: Prevent Self-Cannibalism ---
+        if (node_to_split->GetPageId() == new_right_page->GetPageId()) {
+            std::cerr << "[FATAL] splitNode called with SAME page for both arguments! PageID: "
+                << node_to_split->GetPageId() << std::endl;
+            out_result->did_split = false;
+            return;
+        }
+        // ---------------------------------------------
+
         bool is_leaf_node = isLeaf(node_to_split);
 
         if (is_leaf_node) {
@@ -238,6 +248,8 @@ namespace cmse::adapter {
 
             original->header.key_count = split_index;
             sibling->header.key_count = sibling_count;
+
+            // LINKING LOGIC (Correct Place)
             sibling->next_leaf_id = original->next_leaf_id;
             original->next_leaf_id = new_right_page->GetPageId();
 
@@ -261,7 +273,6 @@ namespace cmse::adapter {
             KeyType old_max = original->header.max_key;
             int32_t old_total = original->header.total_keys;
 
-            // Fix invalid old stats immediately
             if (old_min > old_max) {
                 old_min = original->keys[0];
                 old_max = original->keys[original->header.key_count - 1];
@@ -293,25 +304,17 @@ namespace cmse::adapter {
             original->header.total_keys = left_total;
             sibling->header.total_keys = right_total;
 
-            // ============================================================
-            // 4. LOGICAL FLOOR FIX (Force Reasonable Numbers)
-            // ============================================================
-            // Rule: Total keys >= Number of Children * 5
-            // This prevents "Total: 7" for a node with 168 children.
-
+            // 3. LOGICAL FLOOR FIX
             int32_t min_left = original->header.key_count * 5;
             int32_t min_right = sibling->header.key_count * 5;
 
             if (original->header.total_keys < min_left) original->header.total_keys = min_left;
             if (sibling->header.total_keys < min_right) sibling->header.total_keys = min_right;
-            // ============================================================
 
-            // 3. Stats: Min/Max Boundaries (ANCHORED FIX)
-            // LEFT NODE: Range [OldMin, PromotedKey]
+            // 4. Stats: Min/Max Boundaries
             original->header.min_key = (old_min < out_result->promoted_key) ? old_min : original->keys[0];
             original->header.max_key = out_result->promoted_key;
 
-            // RIGHT NODE: Range [PromotedKey, OldMax]
             sibling->header.min_key = out_result->promoted_key;
             if (sibling_count > 0) {
                 KeyType last_key = sibling->keys[sibling_count - 1];
@@ -321,7 +324,7 @@ namespace cmse::adapter {
                 sibling->header.max_key = old_max;
             }
 
-            // 4. Density (Recalc)
+            // 5. Density (Recalc)
             auto calcDensity = [](BPlusNodeHeader& h) {
                 if (h.max_key >= h.min_key) {
                     double r = (double)(h.max_key - h.min_key) + 1.0;

@@ -38,6 +38,12 @@ class BTreeAdapterTest {
         return r;
     }
 
+    // Helper to setup a clean dummy page
+    void SetupPage(Page* page, page_id_t id) {
+        page->ResetMemory();
+        page->GetHeader()->page_id = id;
+    }
+
 public:
     void RunAllTests() {
         std::cout << "Starting BTreeAdapter Tests..." << std::endl;
@@ -56,6 +62,8 @@ public:
 private:
     void TestLeafInit() {
         Page page;
+        SetupPage(&page, 1);
+
         adapter.initLeaf(&page);
         ASSERT_TRUE(adapter.isLeaf(&page), "Page should be identified as leaf");
         ASSERT_EQ(adapter.getCount(&page), 0, "Initial leaf count should be 0");
@@ -64,6 +72,8 @@ private:
 
     void TestLeafInsertSorted() {
         Page page;
+        SetupPage(&page, 1);
+
         adapter.initLeaf(&page);
 
         // Insert using Dummy Records instead of integers
@@ -87,11 +97,16 @@ private:
     void TestLeafSplit() {
         Page left_page;
         Page right_page;
+
+        // FIX: Initialize memory and assign UNIQUE IDs
+        SetupPage(&left_page, 10);
+        SetupPage(&right_page, 11);
+
         adapter.initLeaf(&left_page);
 
         // Use dynamic max keys (returns MAX_KEYS_LEAF ~ 14)
         int max_keys = adapter.getMaxKeys(&left_page);
-        std::cout << "   -> Filling Leaf Page up to MAX_KEYS_LEAF (" << max_keys << ")..." << std::endl;
+        std::cout << "    -> Filling Leaf Page up to MAX_KEYS_LEAF (" << max_keys << ")..." << std::endl;
 
         for (int i = 0; i < max_keys; i++) {
             bool res = adapter.applyUpdateToLeaf(&left_page, i * 10, createDummyRecord(i * 10));
@@ -103,7 +118,7 @@ private:
 
         ASSERT_EQ(adapter.getCount(&left_page), max_keys, "Leaf page should be full");
 
-        std::cout << "   -> Splitting Leaf Page..." << std::endl;
+        std::cout << "    -> Splitting Leaf Page..." << std::endl;
 
         SplitResult result;
         adapter.splitNode(&left_page, &right_page, &result);
@@ -125,6 +140,8 @@ private:
 
     void TestInternalInit() {
         Page page;
+        SetupPage(&page, 2);
+
         adapter.initInternal(&page);
         ASSERT_TRUE(!adapter.isLeaf(&page), "Page should be identified as Internal");
         std::cout << "[OK] Internal Initialization" << std::endl;
@@ -132,6 +149,8 @@ private:
 
     void TestInternalInsertAndFind() {
         Page page;
+        SetupPage(&page, 3);
+
         adapter.initInternal(&page);
 
         adapter.createNewRoot(&page, 2, 3, 100);
@@ -151,6 +170,11 @@ private:
     void TestInternalSplit() {
         Page left_page;
         Page right_page;
+
+        // FIX: Initialize memory and assign UNIQUE IDs
+        SetupPage(&left_page, 20);
+        SetupPage(&right_page, 21);
+
         adapter.initInternal(&left_page);
 
         // Use MAX_KEYS_INTERNAL (which is large, around 338)
@@ -185,6 +209,8 @@ private:
 
     void TestStatisticsUpdate() {
         Page page;
+        SetupPage(&page, 5);
+
         adapter.initLeaf(&page);
 
         adapter.applyUpdateToLeaf(&page, 10, createDummyRecord(10));
