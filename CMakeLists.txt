@@ -31,7 +31,7 @@ add_library(cmse_core STATIC
     src/adapter/btree_adapter.cpp
     src/adapter/btree_adapter.h
     src/adapter/trie_adapter.h
-    src/versioning/version_manager.h
+    src/version/version_manager.h
     src/utils/log_parser.cpp
     src/utils/log_parser.h
     src/index/btree_index.cpp
@@ -163,3 +163,7 @@ add_test(NAME IntegrityCheck COMMAND integrity_check) # <--- ADDED THIS
 add_executable(btree_iterator_test tests/btree_iterator_test.cpp)
 target_link_libraries(btree_iterator_test PRIVATE cmse_core)
 add_test(NAME BTreeIteratorTest COMMAND btree_iterator_test) # <--- ADDED THIS
+
+add_executable(btree_cow_test tests/btree_cow_test.cpp)
+target_link_libraries(btree_cow_test PRIVATE cmse_core)
+add_test(NAME BTreeCoWTest COMMAND btree_cow_test)

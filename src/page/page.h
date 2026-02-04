@@ -14,7 +14,7 @@ namespace cmse {
      */
     struct PageHeader {
         page_id_t page_id = INVALID_PAGE_ID;
-        version_t creation_version = INVALID_VERSION; // Version that created/modified this page
+        version_id_t creation_version = INVALID_VERSION; // Version that created/modified this page
         uint32_t key_count = 0;                       // Number of keys/entries in the page
         uint8_t is_leaf = 0;                          // 1 if leaf, 0 if internal
         uint8_t reserved[3];                          // Padding for alignment

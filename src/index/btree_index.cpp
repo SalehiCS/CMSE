@@ -552,4 +552,221 @@ namespace cmse::index {
         // Start printing from root
         print_node(root_page_id_, 0);
     }
+
+    // ... includes ...
+
+// =========================================================================
+//  COPY-ON-WRITE IMPLEMENTATION
+// =========================================================================
+
+    PageGuard BTreeIndex::GetPageWritable(page_id_t page_id, TransactionContext& txn) {
+        // Case 1: This page is already a shadow in this transaction
+        if (std::find(txn.created_pages.begin(), txn.created_pages.end(), page_id) != txn.created_pages.end()) {
+            return PageGuard(bpm_, bpm_->FetchPage(page_id));
+        }
+
+        // Case 2: This page is an "Old" page, but we have already shadowed it
+        page_id_t shadow_id = txn.GetShadowPageId(page_id);
+        if (shadow_id != INVALID_PAGE_ID) {
+            return PageGuard(bpm_, bpm_->FetchPage(shadow_id));
+        }
+
+        // Case 3: First time touching this Old Page. MUST COPY.
+        // 1. Fetch Old (Read-Only)
+        PageGuard old_guard(bpm_, bpm_->FetchPage(page_id));
+        if (!old_guard.IsValid()) return PageGuard(); // Error
+
+        // 2. Allocate New (Shadow)
+        page_id_t new_id;
+        PageGuard new_guard(bpm_, bpm_->NewPage(new_id));
+        if (!new_guard.IsValid()) return PageGuard(); // OOM
+
+        // 3. memcpy Data (The "Copy" in Copy-on-Write)
+        // We copy the entire 4KB content from Old to New
+        std::memcpy(new_guard.Get()->GetData(), old_guard.Get()->GetData(), PAGE_SIZE);
+
+        // 4. Update Header on New Page
+        auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_guard.Get()->GetData());
+
+        // --- FIX: Removed 'header->page_id = new_id' ---
+        // The PageID is tracked by the BufferManager (new_guard.Get()->GetPageId()), 
+        // not stored inside the header struct itself.
+
+        header->is_dirty = 1; // Mark as dirty since it's a new copy
+
+        // 5. Register in Transaction
+        txn.RegisterShadow(page_id, new_id);
+
+        return new_guard;
+    }
+    bool BTreeIndex::InsertCoW(const KeyType& key, const ValueType& value, TransactionContext& txn) {
+        // std::lock_guard<std::mutex> lock(latch_); // CoW usually assumes single-writer or external lock
+
+        // --- 1. Handle Empty Tree (Bootstrap) ---
+        if (txn.pending_root_id == INVALID_PAGE_ID) {
+            // Just like StartNewTree, but using txn tracking
+            page_id_t root_id;
+            PageGuard root_guard(bpm_, bpm_->NewPage(root_id));
+            if (!root_guard.IsValid()) return false;
+
+            adapter_.initLeaf(root_guard.Get());
+
+            // Fix loop bug (ensure -1)
+            auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(root_guard.Get()->GetData());
+            leaf->next_leaf_id = INVALID_PAGE_ID;
+
+            adapter_.applyUpdateToLeaf(root_guard.Get(), key, value);
+
+            txn.created_pages.push_back(root_id);
+            txn.pending_root_id = root_id; // Set the draft root
+            return true;
+        }
+
+        // --- 2. Path Copying Traversal ---
+        // We traverse from Root -> Leaf.
+        // At EVERY step, we ensure the current node is "Writable" (Shadowed).
+        // If we shadow a node, we MUST update its Parent to point to the new ID.
+
+        std::vector<PageGuard> ancestors; // Keep shadow guards pinned for split propagation
+
+        // Start with Root
+        PageGuard curr_guard = GetPageWritable(txn.pending_root_id, txn);
+        if (!curr_guard.IsValid()) return false;
+
+        // Update Pending Root (in case Root was just copied)
+        txn.pending_root_id = curr_guard.Get()->GetPageId();
+
+        // Traverse down
+        while (true) {
+            auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(curr_guard.Get()->GetData());
+
+            if (header->is_leaf) {
+                // Found the leaf (Shadowed and ready)
+                break;
+            }
+
+            // Internal Node: Find child to visit
+            auto* internal = reinterpret_cast<cmse::adapter::BPlusInternalNode*>(curr_guard.Get()->GetData());
+            page_id_t child_id = INVALID_PAGE_ID;
+
+            // Simple linear search for child (could use binary search)
+            // Internal keys: [K1, K2]  Children: [C0, C1, C2]
+            // if key < K1 -> C0
+            // if K1 <= key < K2 -> C1
+            // if key >= K2 -> C2
+            int i = 0;
+            for (; i < header->key_count; i++) {
+                if (key < internal->keys[i]) break;
+            }
+            child_id = internal->children[i];
+
+            // --- CRITICAL: Shadow the Child ---
+            PageGuard child_guard = GetPageWritable(child_id, txn);
+            if (!child_guard.IsValid()) return false;
+
+            // --- CRITICAL: Link Parent -> New Child ---
+            // If the child was copied, its ID changed. We must update the parent's pointer.
+            if (child_guard.Get()->GetPageId() != child_id) {
+                internal->children[i] = child_guard.Get()->GetPageId();
+                // Parent is already dirty/shadowed, so this write is safe.
+            }
+
+            // Push Parent to stack (we need it for splits)
+            ancestors.push_back(std::move(curr_guard));
+
+            // Move to Child
+            curr_guard = std::move(child_guard);
+        }
+
+        // --- 3. Insert into Leaf (Shadow) ---
+        // 'curr_guard' is now the Writable Shadow Leaf
+        if (adapter_.applyUpdateToLeaf(curr_guard.Get(), key, value)) {
+            // Success!
+            // We do NOT need to traverse up to mark dirty, because
+            // we already marked everything dirty/shadowed on the way down.
+            // Just need to update stats if you want (optional for CoW drafts).
+            return true;
+        }
+
+        // --- 4. Split Handling (Shadow) ---
+        // If we are here, the Shadow Leaf is full.
+        HandleSplitCoW(std::move(curr_guard), ancestors, txn);
+        return true;
+    }
+
+    void BTreeIndex::HandleSplitCoW(PageGuard node_guard, std::vector<PageGuard>& ancestors, TransactionContext& txn) {
+        // This logic mimics HandleSplit but uses 'txn' to allocate new pages
+        // and 'ancestors' which are already Writable Shadows.
+
+        // 1. Create Sibling (New Page in this Txn)
+        page_id_t sibling_id;
+        PageGuard sibling_guard(bpm_, bpm_->NewPage(sibling_id));
+        if (!sibling_guard.IsValid()) return;
+
+        txn.created_pages.push_back(sibling_id); // Register new page
+
+        // 2. Perform Split
+        cmse::adapter::SplitResult result;
+        adapter_.splitNode(node_guard.Get(), sibling_guard.Get(), &result);
+
+        KeyType key_to_insert = result.promoted_key;
+        page_id_t child_val_to_insert = sibling_id;
+
+        // Drop guards to stop pinning (we rely on IDs for parents)
+        node_guard.Drop();
+        sibling_guard.Drop();
+
+        // 3. Propagate Upwards
+        while (true) {
+            // Case A: Root Split
+            if (ancestors.empty()) {
+                // Create New Root
+                page_id_t new_root_id;
+                PageGuard new_root_guard(bpm_, bpm_->NewPage(new_root_id));
+                if (!new_root_guard.IsValid()) return;
+
+                txn.created_pages.push_back(new_root_id); // Register
+
+                // Link: [OldRootShadow] [Key] [NewSibling]
+                // Note: We use txn.pending_root_id which is the Current Shadow Root
+                adapter_.createNewRoot(new_root_guard.Get(), txn.pending_root_id, child_val_to_insert, key_to_insert);
+
+                // Update Transaction Root
+                txn.pending_root_id = new_root_id;
+                return;
+            }
+
+            // Case B: Insert into Parent (Shadow)
+            PageGuard parent_guard = std::move(ancestors.back());
+            ancestors.pop_back();
+
+            if (adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert)) {
+                return; // Done
+            }
+
+            // Case C: Parent Full -> Split Parent
+            page_id_t p_sibling_id;
+            PageGuard p_sibling_guard(bpm_, bpm_->NewPage(p_sibling_id));
+            if (!p_sibling_guard.IsValid()) return;
+
+            txn.created_pages.push_back(p_sibling_id);
+
+            cmse::adapter::SplitResult p_result;
+            adapter_.splitNode(parent_guard.Get(), p_sibling_guard.Get(), &p_result);
+
+            // Fix "Dropped Key"
+            if (key_to_insert >= p_result.promoted_key) {
+                adapter_.insertIntoInternal(p_sibling_guard.Get(), key_to_insert, child_val_to_insert);
+            }
+            else {
+                adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert);
+            }
+
+            // Move Up
+            child_val_to_insert = p_sibling_id;
+            key_to_insert = p_result.promoted_key;
+
+            // Loop continues...
+        }
+    }
 } // namespace cmse::index

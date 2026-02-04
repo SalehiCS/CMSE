@@ -17,7 +17,7 @@ namespace cmse {
     // Constants
     constexpr page_id_t INVALID_PAGE_ID = -1;
     constexpr int PAGE_SIZE = 4096;
-    constexpr version_t INVALID_VERSION = -1;
+    constexpr version_id_t INVALID_VERSION = -1;
 
     // --- Log Record Structure ---
     struct LogRecord {
