@@ -26,7 +26,7 @@ using namespace cmse;
 class BTreeIteratorTest {
     disk::DiskManager* disk;
     bufferpool::BufferPoolManager* bpm;
-    BTreeIndex* btree;
+    index::BTreeIndex* btree;
     std::string db_file = "iterator_test.db";
     std::string meta_file = "iterator_test.meta";
 
@@ -49,7 +49,7 @@ public:
 
         disk = new disk::DiskManager(db_file);
         bpm = new bufferpool::BufferPoolManager(100, disk); // Small pool to force swapping
-        btree = new BTreeIndex(bpm);
+        btree = new index::BTreeIndex(bpm);
     }
 
     ~BTreeIteratorTest() {
