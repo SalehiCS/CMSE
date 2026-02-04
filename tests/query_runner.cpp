@@ -57,6 +57,45 @@ int main() {
     source_idx->SetRootPageId(source_root);
     host_idx->SetRootPageId(host_root);
 
+    // ... (After loading root IDs) ...
+
+    std::cout << "[DEBUG DIAGNOSTIC] Checking Source Root (Page " << source_root << ")..." << std::endl;
+
+    // 1. Raw Fetch of the Root Page
+    cmse::Page* raw_page = bpm->FetchPage(source_root);
+    if (raw_page == nullptr) {
+        std::cerr << "[CRITICAL] Could not fetch Source Root page! DB file might be empty." << std::endl;
+        return 1;
+    }
+
+    // 2. Cast to TriePage
+    auto* root_node = reinterpret_cast<cmse::TriePage*>(raw_page->GetData());
+
+    // 3. Scan for Children
+    int child_count = 0;
+    std::cout << "   -> Inspecting children of Root:" << std::endl;
+    for (int i = 0; i < 256; i++) {
+        char ch = static_cast<char>(i);
+        if (root_node->HasChild(ch)) {
+            child_count++;
+            cmse::page_id_t child_id = root_node->GetChild(ch);
+            std::cout << "      ['" << (isprint(ch) ? ch : '?') << "'] -> Page " << child_id << std::endl;
+            // Only print the first 5 to avoid spamming
+            if (child_count >= 5) { std::cout << "      ..." << std::endl; break; }
+        }
+    }
+
+    if (child_count == 0) {
+        std::cout << "[FAILURE] Source Trie Root is EMPTY! No children found." << std::endl;
+        std::cout << "          Possible Cause: BufferPoolManager did not flush dirty pages to disk." << std::endl;
+    }
+    else {
+        std::cout << "[SUCCESS] Root has data! Found " << child_count << " branches." << std::endl;
+    }
+
+    bpm->UnpinPage(source_root, false);
+
+    // ... (Rest of the code) ...
     std::cout << "=== CMSE Query Engine (Phase 4) ===" << std::endl;
     std::cout << "Commands: " << std::endl;
     std::cout << "  source <name>          -> Find by Source" << std::endl;

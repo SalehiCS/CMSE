@@ -125,3 +125,6 @@ add_test(NAME TrieTest COMMAND trie_test)
 
 add_executable(query_runner tests/query_runner.cpp)
 target_link_libraries(query_runner PRIVATE cmse_core)
+
+add_executable(trie_visualizer tests/trie_visualizer.cpp)
+target_link_libraries(trie_visualizer PRIVATE cmse_core)

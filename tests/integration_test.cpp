@@ -66,6 +66,11 @@ int main() {
 
         while (parser.GetNextBatch(batch, 10000)) {
             for (const auto& rec : batch) {
+                // Debug print for the first few records
+                if (total_inserted < 5) {
+                    std::cout << "Debug Record: Source=['" << rec.source << "'] Host=['" << rec.host << "']" << std::endl;
+                }
+
                 // --- A. Insert into Primary Index (Time) ---
                 btree->Insert(rec.timestamp, rec);
 
@@ -114,6 +119,10 @@ int main() {
         std::cout << "   -> Source Trie Root: " << source_trie->GetRootId() << std::endl;
         std::cout << "   -> Host Trie Root: " << host_trie->GetRootId() << std::endl;
 
+        // FORCE FLUSH: Ensure all dirty pages are written to disk
+        bpm->FlushAllPages(); // If you have this method
+        // OR manually unpin/flush if your API is different.
+        // 
         // 6. Cleanup
         delete btree;
         delete source_trie;
