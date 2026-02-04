@@ -177,3 +177,8 @@ add_test(NAME BTreeCoWStressTest COMMAND btree_cow_test)
 add_executable(version_persistence_test tests/version_persistence_test.cpp)
 target_link_libraries(version_persistence_test PRIVATE cmse_core)
 add_test(NAME VersionPersistenceTest COMMAND version_persistence_test)
+
+add_executable(version_stress_test tests/version_stress_test.cpp)
+target_link_libraries(version_stress_test PRIVATE cmse_core)
+add_test(NAME VersionStressTest COMMAND version_stress_test)
+
