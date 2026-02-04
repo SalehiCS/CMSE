@@ -66,10 +66,6 @@ int main() {
 
         while (parser.GetNextBatch(batch, 10000)) {
             for (const auto& rec : batch) {
-                // Debug print for the first few records
-                if (total_inserted < 5) {
-                    std::cout << "Debug Record: Source=['" << rec.source << "'] Host=['" << rec.host << "']" << std::endl;
-                }
 
                 // --- A. Insert into Primary Index (Time) ---
                 btree->Insert(rec.timestamp, rec);
