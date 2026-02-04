@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/types.h"
-#include "page/page.h"
+#include "../src/common/types.h"
+#include "../src/page/page.h"
 #include <cstring>
 
 namespace cmse {

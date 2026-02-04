@@ -36,6 +36,7 @@ add_library(cmse_core STATIC
     src/utils/log_parser.h
     src/index/btree_index.cpp
     src/index/btree_index.h
+    src/index/trie_index.cpp
 )
 
 target_include_directories(cmse_core PUBLIC src)
@@ -116,3 +117,8 @@ target_link_libraries(tree_visualizer PRIVATE cmse_core)
 # Range Scan Test
 add_executable(range_scan_test tests/range_scan_test.cpp)
 target_link_libraries(range_scan_test cmse_core)
+
+# Trie Index Test
+add_executable(trie_test tests/trie_test.cpp)
+target_link_libraries(trie_test PRIVATE cmse_core)
+add_test(NAME TrieTest COMMAND trie_test)

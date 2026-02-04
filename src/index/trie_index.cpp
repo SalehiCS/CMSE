@@ -1,4 +1,4 @@
-#include "index/trie_index.h"
+#include "../src/index/trie_index.h"
 #include <iostream>
 
 namespace cmse::index {

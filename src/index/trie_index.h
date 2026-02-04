@@ -1,8 +1,8 @@
 #pragma once
 
-#include "bufferpool/buffer_pool_manager.h"
-#include "index/trie_page.h"
-#include "index/trie_value_page.h"
+#include "../src/bufferpool/buffer_pool_manager.h"
+#include "../src/index/trie_page.h"
+#include "../src/index/trie_value_page.h"
 #include <string>
 #include <vector>
 #include <mutex>
