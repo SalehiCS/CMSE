@@ -38,6 +38,7 @@ add_library(cmse_core STATIC
     src/index/btree_index.h
     src/index/trie_index.cpp
     src/index/btree_iterator.cpp
+    src/version/version_manager.cpp
 )
 
 target_include_directories(cmse_core PUBLIC src)
@@ -172,3 +173,7 @@ add_executable(btree_cow_stress_test tests/btree_cow_stress_test.cpp)
 target_link_libraries(btree_cow_stress_test PRIVATE cmse_core)
 add_test(NAME BTreeCoWStressTest COMMAND btree_cow_test)
 
+
+add_executable(version_persistence_test tests/version_persistence_test.cpp)
+target_link_libraries(version_persistence_test PRIVATE cmse_core)
+add_test(NAME VersionPersistenceTest COMMAND version_persistence_test)
