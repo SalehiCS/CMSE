@@ -29,6 +29,13 @@ namespace cmse::index {
     }
 
     bool BTreeIndex::Insert(const KeyType& key, const ValueType& value) {
+        // --- LAZY INITIALIZATION START ---
+        if (root_page_id_ == INVALID_PAGE_ID) {
+            StartNewTree(key, value);
+            return true;
+        }
+        // --- LAZY INITIALIZATION END ---
+
         std::lock_guard<std::mutex> lock(latch_);
 
         int attempts = 0;
