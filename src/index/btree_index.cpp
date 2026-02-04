@@ -560,45 +560,42 @@ namespace cmse::index {
 // =========================================================================
 
     PageGuard BTreeIndex::GetPageWritable(page_id_t page_id, TransactionContext& txn) {
-        // Case 1: This page is already a shadow in this transaction
+        // Check Case 1
         if (std::find(txn.created_pages.begin(), txn.created_pages.end(), page_id) != txn.created_pages.end()) {
+            // std::cout << "   [CoW] Page " << page_id << " is already NEW. Returning directly." << std::endl;
             return PageGuard(bpm_, bpm_->FetchPage(page_id));
         }
 
-        // Case 2: This page is an "Old" page, but we have already shadowed it
+        // Check Case 2
         page_id_t shadow_id = txn.GetShadowPageId(page_id);
         if (shadow_id != INVALID_PAGE_ID) {
+            // std::cout << "   [CoW] Page " << page_id << " already shadowed as " << shadow_id << ". Using Shadow." << std::endl;
             return PageGuard(bpm_, bpm_->FetchPage(shadow_id));
         }
 
-        // Case 3: First time touching this Old Page. MUST COPY.
-        // 1. Fetch Old (Read-Only)
+        // Case 3: Copy
         PageGuard old_guard(bpm_, bpm_->FetchPage(page_id));
-        if (!old_guard.IsValid()) return PageGuard(); // Error
+        if (!old_guard.IsValid()) return PageGuard();
 
-        // 2. Allocate New (Shadow)
         page_id_t new_id;
         PageGuard new_guard(bpm_, bpm_->NewPage(new_id));
-        if (!new_guard.IsValid()) return PageGuard(); // OOM
+        if (!new_guard.IsValid()) return PageGuard();
 
-        // 3. memcpy Data (The "Copy" in Copy-on-Write)
-        // We copy the entire 4KB content from Old to New
+        // --- CRITICAL DEBUG PRINT ---
+        std::cout << "   [CoW] COPYING Page " << page_id << " -> " << new_id << std::endl;
+        // ----------------------------
+
         std::memcpy(new_guard.Get()->GetData(), old_guard.Get()->GetData(), PAGE_SIZE);
 
-        // 4. Update Header on New Page
         auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_guard.Get()->GetData());
+        header->is_dirty = 1;
 
-        // --- FIX: Removed 'header->page_id = new_id' ---
-        // The PageID is tracked by the BufferManager (new_guard.Get()->GetPageId()), 
-        // not stored inside the header struct itself.
-
-        header->is_dirty = 1; // Mark as dirty since it's a new copy
-
-        // 5. Register in Transaction
         txn.RegisterShadow(page_id, new_id);
 
         return new_guard;
     }
+
+
     bool BTreeIndex::InsertCoW(const KeyType& key, const ValueType& value, TransactionContext& txn) {
         // std::lock_guard<std::mutex> lock(latch_); // CoW usually assumes single-writer or external lock
 
