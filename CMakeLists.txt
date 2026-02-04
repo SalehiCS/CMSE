@@ -144,3 +144,6 @@ target_link_libraries(debug_path PRIVATE cmse_core)
 
 add_executable(btree_iterator_test tests/btree_iterator_test.cpp)
 target_link_libraries(btree_iterator_test PRIVATE cmse_core)
+
+add_executable(db_pager tests/db_pager.cpp src/index/btree_iterator.cpp)
+target_link_libraries(db_pager PRIVATE cmse_core)
