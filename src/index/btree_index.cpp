@@ -185,8 +185,20 @@ namespace cmse::index {
         ctx.path_pages.pop_back();
         ctx.UnpinAll(bpm_, false); // Unpins all ancestors
 
+        // --- SAFETY
+        int scanned_pages = 0;
+        const int MAX_SCAN_PAGES = 100000;
+
         // 2. Horizontal Linear Scan (Leaf -> Next Leaf)
         while (curr_page != nullptr) {
+            // --- SAFETY CHECK ---
+            scanned_pages++;
+            if (scanned_pages > MAX_SCAN_PAGES) {
+                std::cerr << "[FATAL] Infinite Loop detected in Scan! B+Tree Leaf Chain is circular." << std::endl;
+                bpm_->UnpinPage(curr_page->GetPageId(), false);
+                break;
+            }
+            // --------------------
             auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(curr_page->GetData());
             int count = leaf->header.key_count;
             page_id_t next_page_id = leaf->next_leaf_id;
@@ -209,6 +221,12 @@ namespace cmse::index {
 
             if (next_page_id == INVALID_PAGE_ID) {
                 break; // End of chain
+            }
+
+            // (Self-Cycle)
+            if (next_page_id == curr_page->GetPageId()) {
+                std::cerr << "[FATAL] Page " << next_page_id << " points to itself!" << std::endl;
+                break;
             }
 
             // Fetch next leaf from Buffer Pool
@@ -239,7 +257,21 @@ namespace cmse::index {
         page_id_t next_leaf_id = root_page_id_;
         cmse::Page* curr_page = nullptr;
 
+        // --- SAFETY
+        int depth = 0;
+        const int MAX_DEPTH = 50; 
+
+        // -------------------------------
         while (true) {
+
+            // --- SAFETY CHECK ---
+            if (depth++ > MAX_DEPTH) {
+                std::cerr << "[FATAL] Infinite Loop in FindLeaf! Routing broken." << std::endl;
+                if (curr_page) bpm_->UnpinPage(curr_page->GetPageId(), false);
+                ctx.UnpinAll(bpm_, false);
+                return nullptr;
+            }
+            // --------------------
             curr_page = bpm_->FetchPage(next_leaf_id);
             if (curr_page == nullptr) {
                 std::cerr << "[BTreeIndex] Failed to fetch page " << next_leaf_id << std::endl;
