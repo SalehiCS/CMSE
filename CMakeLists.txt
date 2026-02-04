@@ -128,3 +128,6 @@ target_link_libraries(query_runner PRIVATE cmse_core)
 
 add_executable(trie_visualizer tests/trie_visualizer.cpp)
 target_link_libraries(trie_visualizer PRIVATE cmse_core)
+
+add_executable(debug_search tests/debug_search.cpp)
+target_link_libraries(debug_search PRIVATE cmse_core)

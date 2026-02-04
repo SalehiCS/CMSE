@@ -6,30 +6,31 @@ namespace cmse::index {
     TrieIndex::TrieIndex(cmse::bufferpool::BufferPoolManager* bpm)
         : bpm_(bpm), root_page_id_(INVALID_PAGE_ID) {
 
-        // Create the Root Page immediately upon initialization
-        cmse::Page* root_page = bpm_->NewPage(root_page_id_);
-
-        if (root_page == nullptr) {
-            throw std::runtime_error("Failed to allocate Root Page for TrieIndex. Buffer Pool might be full.");
-        }
-
-        // Initialize the root as a generic TriePage
-        auto* trie_node = reinterpret_cast<cmse::TriePage*>(root_page->GetData());
-        trie_node->Init();
-
-        // Always unpin pages when done
-        bpm_->UnpinPage(root_page_id_, true);
     }
 
     void TrieIndex::Insert(const std::string& key, int64_t timestamp, uint8_t log_level) {
         std::lock_guard<std::mutex> guard(latch_);
 
+        // --- LAZY INITIALIZATION ---
+        if (root_page_id_ == INVALID_PAGE_ID) {
+            // Only create a root if one doesn't exist
+            cmse::Page* root_page = bpm_->NewPage(root_page_id_);
+            if (root_page == nullptr) return; // Out of memory
+
+            auto* node = reinterpret_cast<cmse::TriePage*>(root_page->GetData());
+            node->Init();
+            bpm_->UnpinPage(root_page_id_, true);
+
+            // Note: In a real system, you'd update the Catalog here to save the new root_id
+        }
+        // ---------------------------
+
         if (key.empty()) return;
 
-        // 1. Start traversal from the Root
         page_id_t current_page_id = root_page_id_;
         cmse::TriePage* current_node = FetchTriePage(current_page_id);
 
+        
         if (current_node == nullptr) return;
 
         // 2. Traverse or Create the Path
