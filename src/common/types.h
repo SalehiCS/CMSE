@@ -9,7 +9,7 @@ namespace cmse {
 
     using page_id_t = int32_t;
     using frame_id_t = int32_t;
-    using version_t = int32_t;
+    using version_id_t = int32_t;
 
     // Key: Timestamp (8 bytes)
     using KeyType = int64_t;
