@@ -1,4 +1,5 @@
 #include "btree_iterator.h"
+#include <iostream> 
 
 namespace cmse {
 
@@ -51,16 +52,23 @@ namespace cmse {
         // 1. Advance index
         curr_index_++;
 
-        // 2. Check if we went past the end of this page
+        // Check if we went past the end of this page
         if (curr_index_ >= leaf->header.key_count) {
-            page_id_t next_id = leaf->next_leaf_id;
 
-            // 1. Release current page (Destroys old guard content)
-            // 2. Fetch new page
-            // 3. Wrap new page in guard
+            page_id_t current_id = curr_guard_.Get()->GetPageId(); // <--- Get Current ID for Debug
+            page_id_t next_id = leaf->next_leaf_id;                // <--- Read Next Pointer
+
+            // OPTIMIZATION: Check for End BEFORE calling FetchPage
+            // This prevents wasting time asking BufferPool for page -1
+            if (next_id == INVALID_PAGE_ID) {
+                is_end_ = true;
+                // Guard automatically unpins current page when we return or overwrite it
+                return *this;
+            }
+
+            // 1. Release current & Fetch next (Standard Logic)
             curr_guard_ = PageGuard(bpm_, bpm_->FetchPage(next_id));
 
-            // 3. Check if there is a next page
             if (!curr_guard_.IsValid()) {
                 is_end_ = true;
             }
