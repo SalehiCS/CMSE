@@ -24,6 +24,7 @@ namespace cmse {
             void WritePage(page_id_t page_id, const char* data);
             page_id_t AllocatePage();
             int GetNumFlushes() const;
+            void DiskManager::Sync();
 
         private:
             std::string file_name_;
