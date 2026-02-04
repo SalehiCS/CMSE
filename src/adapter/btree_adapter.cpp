@@ -50,6 +50,9 @@ namespace cmse::adapter {
         leaf->next_leaf_id = INVALID_PAGE_ID;
 
         leaf->header.total_keys = 0; // <--- Add this
+        
+        syncPageHeader(page);
+
         updateStatistics(page);      // <--- Call update to set defaults
     }
 
@@ -63,6 +66,9 @@ namespace cmse::adapter {
         internal->header.density = 0.0f;
 
         internal->header.total_keys = 0; // <--- Add this
+
+        syncPageHeader(page);
+
         updateStatistics(page);      // <--- Call update to set defaults
     }
 
@@ -139,6 +145,8 @@ namespace cmse::adapter {
         leaf->values[index] = val; // Copy assignment of LogRecord
         leaf->header.key_count++;
 
+        syncPageHeader(leaf_page);
+
         updateStatistics(leaf_page);
 
         return true;
@@ -196,6 +204,8 @@ namespace cmse::adapter {
         internal->keys[index] = key;
         internal->children[index + 1] = right_child_id;
         internal->header.key_count++;
+
+        syncPageHeader(internal_page);
 
         updateStatistics(internal_page);
         return true;
@@ -313,6 +323,8 @@ namespace cmse::adapter {
         }
 
         out_result->did_split = true;
+        syncPageHeader(node_to_split);
+        syncPageHeader(new_right_page);
     }
 
     void BTreeAdapter::createNewRoot(Page* new_root_page, page_id_t left_child, page_id_t right_child, const KeyType& key) {
@@ -323,6 +335,8 @@ namespace cmse::adapter {
         root->children[0] = left_child;
         root->children[1] = right_child;
         root->header.key_count = 1;
+
+        syncPageHeader(new_root_page);
 
         updateStatistics(new_root_page);
     }

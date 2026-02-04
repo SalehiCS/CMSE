@@ -81,6 +81,13 @@ namespace cmse::adapter {
         BPlusLeafNode* getLeafNode(Page* page) {
             return reinterpret_cast<BPlusLeafNode*>(page->GetData());
         }
+        void syncPageHeader(Page* page) {
+            BPlusNodeHeader* internal_h = getHeader(page);
+            PageHeader* external_h = page->GetHeader();
+
+            external_h->is_leaf = internal_h->is_leaf ? 1 : 0;
+            external_h->key_count = internal_h->key_count;
+        }
     };
 
 } // namespace cmse::adapter

@@ -134,3 +134,6 @@ target_link_libraries(debug_search PRIVATE cmse_core)
 
 add_executable(integrity_check tests/integrity_check.cpp)
 target_link_libraries(integrity_check PRIVATE cmse_core)
+
+add_executable(btree_visualizer tests/btree_visualizer.cpp)
+target_link_libraries(btree_visualizer PRIVATE cmse_core)
