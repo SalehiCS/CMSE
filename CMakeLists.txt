@@ -43,6 +43,12 @@ add_library(cmse_core STATIC
 
 target_include_directories(cmse_core PUBLIC src)
 
+# --- Main CLI Application ---
+add_executable(cmse_app src/main.cpp)
+
+# Link the core library we defined above
+target_link_libraries(cmse_app PRIVATE cmse_core)
+
 # ------------------------------------------------------------------------------
 # 2. Tests
 # ------------------------------------------------------------------------------
