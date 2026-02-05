@@ -21,6 +21,9 @@ namespace cmse {
         // The Pending Root for this version
         page_id_t pending_root_id = INVALID_PAGE_ID;
 
+        page_id_t pending_trie_root_id = INVALID_PAGE_ID;
+
+
         // Helper: Check if a page has already been shadowed
         page_id_t GetShadowPageId(page_id_t original_id) {
             if (shadow_map.find(original_id) != shadow_map.end()) {

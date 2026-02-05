@@ -17,6 +17,7 @@ namespace cmse {
     struct VersionMetadata {
         version_id_t version_id;
         page_id_t root_page_id;
+        page_id_t trie_root_page_id;
         int64_t timestamp;     // Wall clock time
         int64_t max_log_ts;    // The highest Log Timestamp ingested (for Resume)
         size_t file_offset;
@@ -54,6 +55,7 @@ namespace cmse {
         version_id_t GetLatestVersionId() const;
 
         page_id_t GetLatestRootPageId() const;
+        page_id_t GetLatestTrieRootPageId() const;
 
         int64_t GetLastCommittedLogTimestamp() const;
 

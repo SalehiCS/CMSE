@@ -13,6 +13,7 @@
 #include "../version/version_manager.h"
 #include "../query/query_engine.h"
 #include "../utils/log_parser.h"
+#include "../common/logger.h"
 
 namespace cmse {
 
@@ -32,6 +33,15 @@ namespace cmse {
             page_id_t last_root = vm_->GetLatestRootPageId();
             if (last_root != INVALID_PAGE_ID) {
                 btree_->SetRootPageId(last_root);
+            }
+            page_id_t last_trie_root = vm_->GetLatestTrieRootPageId();
+            // Add logging to verify this step runs
+            if (last_trie_root != INVALID_PAGE_ID) {
+                std::cout << "[Engine] Restoring Trie Root: " << last_trie_root << std::endl;
+                trie_->SetRootPageId(last_trie_root);
+            }
+            else {
+                std::cout << "[Engine] No Trie Root found in metadata." << std::endl;
             }
 
             // Init Query Engine
@@ -74,6 +84,11 @@ namespace cmse {
 
                 // --- COMMIT CHECK ---
                 if (records_since_commit >= COMMIT_THRESHOLD) {
+                    // UPDATE TXN with latest Trie State
+                    txn.pending_trie_root_id = trie_->GetRootId();
+
+                    LOG_DEBUG("[Engine] Pre-Commit: TrieRoot=" << txn.pending_trie_root_id);
+
                     int64_t current_max_ts = batch.back().timestamp;
                     size_t current_offset = parser.GetCurrentPosition(); // Get Byte Offset
 
@@ -83,6 +98,11 @@ namespace cmse {
                     vm_->Commit(txn, current_max_ts, current_offset);
 
                     txn = vm_->BeginTransaction();
+
+                    txn.pending_trie_root_id = trie_->GetRootId();
+
+                    LOG_DEBUG("[Engine] New Txn Started. Inherited TrieRoot=" << txn.pending_trie_root_id);
+
                     records_since_commit = 0;
                     std::cout << "Done." << std::endl;
                 }
@@ -107,10 +127,8 @@ namespace cmse {
         void RunQueryInteractive() {
             std::cout << "\n--- Query Mode ---" << std::endl;
             std::cout << "  help: show supported patterns" << std::endl;
-            std::cout << "  back: back to main menu" << std::endl;
-
-            // Clean input buffer
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cout << "  back: back to main menu\n" << std::endl;
+            PrintQueryHelp();
 
             while (true) {
                 std::cout << "\nQuery > ";

@@ -18,10 +18,16 @@ namespace cmse {
 
         // Resume from latest (if exists), else start clean
         if (!versions_.empty()) {
+
+            // 1. Inherit B+Tree Root
             txn.pending_root_id = versions_.rbegin()->second.root_page_id;
+
+            // 2. Inherit Trie Root (CRITICAL FIX)
+            txn.pending_trie_root_id = versions_.rbegin()->second.trie_root_page_id;
         }
         else {
             txn.pending_root_id = INVALID_PAGE_ID;
+            txn.pending_trie_root_id = INVALID_PAGE_ID;
         }
 
         return txn;
@@ -44,9 +50,12 @@ namespace cmse {
         VersionMetadata meta;
         meta.version_id = txn.version_id;
         meta.root_page_id = txn.pending_root_id;
+        meta.trie_root_page_id = txn.pending_trie_root_id;
         meta.max_log_ts = max_log_ts;
         meta.timestamp = std::time(nullptr);
         meta.file_offset = file_offset; // <--- Store the offset
+
+        LOG_DEBUG("[Version] Meta Created. Meta.TrieRoot=" << meta.trie_root_page_id);
 
         // 3. Update Memory & Disk
         versions_[meta.version_id] = meta;
@@ -68,6 +77,13 @@ namespace cmse {
         // Read struct by struct
         while (in.read(reinterpret_cast<char*>(&meta), sizeof(VersionMetadata))) {
             versions_[meta.version_id] = meta;
+            LOG_DEBUG("[Version] Loaded v" << meta.version_id << " TrieRoot=" << meta.trie_root_page_id);
+            if (!versions_.empty()) {
+                LOG_DEBUG("[Version] Final State: Latest TrieRoot=" << versions_.rbegin()->second.trie_root_page_id);
+            }
+            else {
+                LOG_DEBUG("[Version] No versions loaded (Fresh Start).");
+            }
             if (meta.version_id >= next_version_id_) {
                 next_version_id_ = meta.version_id + 1;
             }
@@ -97,6 +113,11 @@ namespace cmse {
     page_id_t VersionManager::GetLatestRootPageId() const {
         if (versions_.empty()) return INVALID_PAGE_ID;
         return versions_.rbegin()->second.root_page_id;
+    }
+
+    page_id_t VersionManager::GetLatestTrieRootPageId() const {
+        if (versions_.empty()) return INVALID_PAGE_ID;
+        return versions_.rbegin()->second.trie_root_page_id;
     }
 
     int64_t VersionManager::GetLastCommittedLogTimestamp() const {
