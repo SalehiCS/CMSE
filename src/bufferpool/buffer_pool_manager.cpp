@@ -210,8 +210,6 @@ namespace cmse {
         void BufferPoolManager::FlushAllPages() {
             std::lock_guard<std::mutex> lock(latch_);
 
-            // [LOGGING] Start of flush
-            std::cout << "[BPM] --- FlushAllPages Started ---" << std::endl;
 
             int flushed = 0;
             for (auto const& [pid, fid] : page_table_) {
@@ -224,9 +222,6 @@ namespace cmse {
                     flushed++;
                 }
             }
-
-            // [LOGGING] Summary
-            std::cout << "[BPM] Flush Complete. Pages Written: " << flushed << std::endl;
 
             // [CRITICAL FIX] 
             // We MUST force the OS to save the data we just wrote, 
