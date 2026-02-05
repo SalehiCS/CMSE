@@ -260,6 +260,8 @@ namespace cmse::index {
         int64_t max_ts,
         size_t cap)
     {
+
+        
         std::lock_guard<std::mutex> guard(latch_);
         SearchResult result;
 
@@ -327,7 +329,10 @@ namespace cmse::index {
                 // Cap Check
                 if (result.timestamps.size() > cap) {
                     result.is_overflow = true;
-                    result.timestamps.clear();
+
+                    // FIX: Do NOT clear. Just remove the extra one that exceeded the cap.
+                    result.timestamps.pop_back();
+
                     return;
                 }
             }
