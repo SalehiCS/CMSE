@@ -1,6 +1,7 @@
 // src/disk/disk_manager.cpp
 
 #include "disk_manager.h"
+#include "../common/logger.h"
 #include <stdexcept>
 #include <cstring>
 #include <filesystem>
@@ -90,9 +91,15 @@ namespace cmse {
             long file_size = ftell(db_file_);
 
             if (static_cast<long>(offset) >= file_size) {
+                // [LOG] Catch reads past EOF (often implies uninitialized page IDs)
+                LOG_DEBUG("[Disk] ReadPage: ID=" << page_id << " (Past EOF, returning zero)");
+
                 std::memset(data, 0, PAGE_SIZE);
                 return;
             }
+
+             // [LOG] Normal read
+             LOG_DEBUG("[Disk] ReadPage: ID=" << page_id); // Optional: Uncomment if too verbose
 
             fseek(db_file_, (long)offset, SEEK_SET);
             size_t read_count = fread(data, 1, PAGE_SIZE, db_file_);
@@ -105,6 +112,8 @@ namespace cmse {
             std::lock_guard<std::mutex> lock(db_io_latch_);
             size_t offset = static_cast<size_t>(page_id) * PAGE_SIZE;
 
+            // [LOG] Track write attempts
+            LOG_DEBUG("[Disk] WritePage: ID=" << page_id << " Offset=" << offset);
 
             fseek(db_file_, (long)offset, SEEK_SET);
             size_t written = fwrite(data, 1, PAGE_SIZE, db_file_);

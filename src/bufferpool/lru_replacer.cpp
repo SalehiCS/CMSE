@@ -5,6 +5,7 @@
  */
 
 #include "lru_replacer.h"
+#include "../common/logger.h"
 
 namespace cmse {
     namespace bufferpool {
@@ -39,6 +40,9 @@ namespace cmse {
         void LRUReplacer::Pin(frame_id_t frame_id) {
             std::lock_guard<std::mutex> lock(mutex_);
 
+            // [LOG] Pinning implies the page is now in use
+            LOG_DEBUG("[LRU] Pin Frame " << frame_id);
+
             // If the frame is in the replacer (map), it means it was a candidate for eviction.
             // Since it is being pinned now (used by a thread), we must remove it from the replacer.
             auto it = lru_map_.find(frame_id);
@@ -61,6 +65,9 @@ namespace cmse {
                 return;
             }
 
+            // [LOG] Unpinning implies the page is candidate for eviction
+            LOG_DEBUG("[LRU] Unpin Frame " << frame_id << " (Candidate for eviction)");
+    
             // When a page is unpinned (usage finished), it is considered "Recently Used".
             // So we add it to the FRONT of the list.
             lru_list_.push_front(frame_id);

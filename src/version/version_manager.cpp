@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <ctime>
+#include "../common/logger.h"
 
 namespace cmse {
 
@@ -32,6 +33,10 @@ namespace cmse {
     void VersionManager::Commit(TransactionContext& txn, int64_t max_log_ts, size_t file_offset) {
         std::lock_guard<std::mutex> guard(latch_);
 
+        LOG_DEBUG("[Version] Committing Txn: " << txn.version_id
+            << " Root: " << txn.pending_root_id
+            << " Offset: " << file_offset);
+
         // 1. Flush to disk (User confirmed this works now)
         bpm_->FlushAllPages();
 
@@ -48,6 +53,8 @@ namespace cmse {
         if (meta.version_id >= next_version_id_) next_version_id_ = meta.version_id + 1;
 
         AppendVersionToDisk(meta);
+
+        LOG_DEBUG("[Version] Commit Complete.");
     }
 
     void VersionManager::LoadVersions() {

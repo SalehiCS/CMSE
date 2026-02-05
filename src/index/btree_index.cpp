@@ -1,6 +1,7 @@
 #include "index/btree_index.h"
 #include "bufferpool/buffer_pool_manager.h"
 #include "page/page.h"
+#include "../common/logger.h"
 
 #include <functional>
 #include <iostream>
@@ -27,8 +28,11 @@ namespace cmse::index
         int attempts = 0;
         const int MAX_ATTEMPTS = 5;
 
+        LOG_DEBUG("[BTree] Insert Start: Key=" << key);
+
         while (attempts < MAX_ATTEMPTS) {
             if (root_page_id_ == INVALID_PAGE_ID) {
+                LOG_DEBUG("[BTree] Empty tree, starting new root for Key=" << key);
                 StartNewTree(key, value);
                 return true;
             }
@@ -36,7 +40,10 @@ namespace cmse::index
             TraversalContext ctx;
             PageGuard leaf_guard = FindLeaf(key, ctx, true);
 
-            if (!leaf_guard.IsValid()) return false;
+            if (!leaf_guard.IsValid()) {
+                LOG_DEBUG("[BTree] Insert Failed: Could not find leaf for Key=" << key);
+                return false;
+            }
 
             // Case 3: Try to insert into the leaf
             if (adapter_.applyUpdateToLeaf(leaf_guard.Get(), key, value)) {
@@ -46,15 +53,17 @@ namespace cmse::index
                 // If we don't do this, GetValue() will PRUNE valid keys!
                 UpdateStatsUpwards(ctx, key);
                 // --------------------------
-
+                LOG_DEBUG("[BTree] Insert Success: Key=" << key << " in Leaf=" << leaf_guard.Get()->GetPageId());
                 leaf_guard.SetDirty(true);
                 return true; // Guards unpin automatically
             }
 
+            LOG_DEBUG("[BTree] Page Full, Handling Split on Leaf=" << leaf_guard.Get()->GetPageId());
             // Case 4: Split
             HandleSplit(std::move(leaf_guard), ctx);
             attempts++;
         }
+        LOG_DEBUG("[BTree] Insert Failed: Max attempts reached for Key=" << key);
         return false;
     }
 
@@ -143,7 +152,10 @@ namespace cmse::index
         TraversalContext ctx;
         PageGuard curr_guard = FindLeaf(start_key, ctx, false);
 
-        if (!curr_guard.IsValid()) return results;
+        if (!curr_guard.IsValid()) {
+            LOG_DEBUG("[BTree] FindLeaf Error: Invalid Root " << root_page_id_);
+            return results;
+        }
 
         // --- SAFETY LOOP ---
         int scanned_pages = 0;

@@ -2,6 +2,8 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm> // For std::upper_bound, std::copy, std::distance
+#include "../common/logger.h"
+
 
 namespace cmse::adapter {
 
@@ -222,8 +224,13 @@ namespace cmse::adapter {
 
     void BTreeAdapter::splitNode(Page* node_to_split, Page* new_right_page, SplitResult* out_result) {
 
+        // [LOG] Vital for debugging lost data: Which pages are being created?
+        LOG_DEBUG("[Adapter] Splitting Page " << node_to_split->GetPageId());
+
         // --- SAFETY GUARD: Prevent Self-Cannibalism ---
         if (node_to_split->GetPageId() == new_right_page->GetPageId()) {
+            LOG_DEBUG("[Adapter] FATAL: Self-split attempt on Page " << node_to_split->GetPageId());
+
             std::cerr << "[FATAL] splitNode called with SAME page for both arguments! PageID: "
                 << node_to_split->GetPageId() << std::endl;
             out_result->did_split = false;
@@ -269,7 +276,7 @@ namespace cmse::adapter {
             // 7. Update Stats (Exact for Leaves)
             updateStatistics(node_to_split);
             updateStatistics(new_right_page);
-
+            LOG_DEBUG("[Adapter] Leaf Split Done. Promoted Key=" << out_result->promoted_key);
         }
         else {
             // ==========================================================
@@ -357,6 +364,8 @@ namespace cmse::adapter {
 
             calcDensity(original->header);
             calcDensity(sibling->header);
+
+            LOG_DEBUG("[Adapter] Internal Split Done. Promoted Key=" << out_result->promoted_key);
         }
 
         // Finalize
