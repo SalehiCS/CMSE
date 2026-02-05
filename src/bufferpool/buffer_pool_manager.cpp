@@ -152,35 +152,7 @@ namespace cmse {
             return page;
         }
 
-        bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
-            std::lock_guard<std::mutex> lock(latch_);
 
-            if (page_table_.find(page_id) == page_table_.end()) {
-                return false;
-            }
-
-            frame_id_t frame_id = page_table_[page_id];
-            Page* page = &pages_[frame_id];
-
-            if (page->pin_count_ <= 0) {
-                return false;
-            }
-
-            // Decrement pin count
-            page->pin_count_--;
-
-            // Update dirty flag
-            if (is_dirty) {
-                page->is_dirty_ = true;
-            }
-
-            // If pin count reaches 0, the page is candidate for eviction
-            if (page->pin_count_ == 0) {
-                replacer_->Unpin(frame_id);
-            }
-
-            return true;
-        }
 
         bool BufferPoolManager::FlushPage(page_id_t page_id) {
             std::lock_guard<std::mutex> lock(latch_);
@@ -236,16 +208,64 @@ namespace cmse {
         }
 
         void BufferPoolManager::FlushAllPages() {
-            // We iterate over the page table to flush only valid pages
             std::lock_guard<std::mutex> lock(latch_);
 
+            // [LOGGING] Start of flush
+            std::cout << "[BPM] --- FlushAllPages Started ---" << std::endl;
+
+            int flushed = 0;
             for (auto const& [pid, fid] : page_table_) {
                 Page* page = &pages_[fid];
                 if (page->is_dirty_) {
+                    // [LOGGING] Identify exactly which pages are being saved
+                    std::cout << "[BPM] Flushing Dirty Page: " << pid << std::endl;
+
+                    // Used GetHeader() as requested
                     disk_manager_->WritePage(pid, reinterpret_cast<char*>(page->GetHeader()));
                     page->is_dirty_ = false;
+                    flushed++;
                 }
             }
+
+            // [LOGGING] Summary
+            std::cout << "[BPM] Flush Complete. Pages Written: " << flushed << std::endl;
+
+            // [CRITICAL FIX] 
+            // We MUST force the OS to save the data we just wrote, 
+            // otherwise the VersionStressTest will fail on restart.
+            disk_manager_->Sync();
+        }
+
+        bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
+            std::lock_guard<std::mutex> lock(latch_);
+
+            if (page_table_.find(page_id) == page_table_.end()) {
+                return false;
+            }
+
+            frame_id_t frame_id = page_table_[page_id];
+            Page* page = &pages_[frame_id];
+
+            if (page->pin_count_ <= 0) {
+                return false;
+            }
+
+            // Decrement pin count
+            page->pin_count_--;
+
+            // Update dirty flag
+            if (is_dirty) {
+                // [LOGGING] Verify BTree is correctly marking pages as dirty
+                // std::cout << "[BPM] UnpinPage: Marking Page " << page_id << " DIRTY" << std::endl;
+                page->is_dirty_ = true;
+            }
+
+            // If pin count reaches 0, the page is candidate for eviction
+            if (page->pin_count_ == 0) {
+                replacer_->Unpin(frame_id);
+            }
+
+            return true;
         }
 
     } // namespace bufferpool

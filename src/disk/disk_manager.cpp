@@ -105,8 +105,15 @@ namespace cmse {
             std::lock_guard<std::mutex> lock(db_io_latch_);
             size_t offset = static_cast<size_t>(page_id) * PAGE_SIZE;
 
+            // [LOGGING] Verify we are actually writing to the file
+            std::cout << "[Disk] Writing Page " << page_id << " @ Offset " << offset << std::endl;
+
             fseek(db_file_, (long)offset, SEEK_SET);
-            fwrite(data, 1, PAGE_SIZE, db_file_);
+            size_t written = fwrite(data, 1, PAGE_SIZE, db_file_);
+
+            if (written != PAGE_SIZE) {
+                std::cerr << "[Disk] FATAL WRITE ERROR on Page " << page_id << std::endl;
+            }
 
             // Note: We intentionally DO NOT flush here for performance.
             // The FlushAllPages or Destructor will handle the final sync.
