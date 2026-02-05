@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream> // Used only for debug reading
 #include <iomanip>
+#include <filesystem>
 
 #include "../src/bufferpool/buffer_pool_manager.h"
 
@@ -60,6 +61,9 @@ void DebugFileContent(const std::string& filename, int expected_bytes_check) {
 
 int main() {
     // 0. Cleanup
+    const std::string DB_FILE =
+        std::filesystem::absolute("test_run.db").string();
+
     std::remove(DB_FILE.c_str());
     Log("Cleaned up old DB file.");
 
