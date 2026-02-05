@@ -19,6 +19,14 @@ using namespace cmse::utils;
 int main() {
     std::cout << "Running LogParser Tests (External File Mode)..." << std::endl;
 
+    // --- FIX: Create the dummy file first ---
+    {
+        std::ofstream out("sample_test.log");
+        out << "TS:1000 | MSG:Log Line 1\n";
+        out << "TS:1001 | MSG:Log Line 2\n";
+        out.close();
+    }
+
     // The user must place this file manually in the build/bin directory
     const std::string TEST_FILENAME = "sample_test.log";
 

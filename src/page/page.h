@@ -46,6 +46,8 @@ namespace cmse {
         // Zeros out the page data
         void ResetMemory() { std::memset(data_, 0, PAGE_SIZE); }
 
+        bool IsDirty() { return is_dirty_; }
+
     private:
         char data_[PAGE_SIZE]; // Actual 4KB data
 
