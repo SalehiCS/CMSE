@@ -1,4 +1,5 @@
 #include "../src/index/trie_index.h"
+#include "../common/logger.h"
 #include <iostream>
 
 namespace cmse::index {
@@ -260,27 +261,48 @@ namespace cmse::index {
         int64_t max_ts,
         size_t cap)
     {
-
+        LOG_DEBUG("[Trie] Search Start: Key='" << key << "' Prefix=" << is_prefix
+            << " Prio=" << priority_filter << " Cap=" << cap);
         
         std::lock_guard<std::mutex> guard(latch_);
         SearchResult result;
 
-        if (root_page_id_ == INVALID_PAGE_ID) return result;
+        // [DEBUG CHECK] Is your result struct initialized?
+        // If this prints "1" (true) immediately, your struct lacks default initialization!
+        LOG_DEBUG("[Trie] Init Result: Overflow=" << result.is_overflow << " Size=" << result.timestamps.size());
+
+        if (root_page_id_ == INVALID_PAGE_ID) {
+            LOG_DEBUG("[Trie] Empty Trie (Root Invalid)");
+            return result;
+        }
 
         PageGuard curr_guard = FetchPageGuard(root_page_id_);
-        if (!curr_guard.IsValid()) return result;
+        if (!curr_guard.IsValid()) {
+            LOG_DEBUG("[Trie] Failed to fetch Root Page " << root_page_id_);
+            return result;
+        }
 
         // 1. Traverse to node
         for (char ch : key) {
             auto* node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
-            if (!node->HasChild(ch)) return result;
+            if (!node->HasChild(ch)) {
+                LOG_DEBUG("[Trie] Traversal Stop: Node " << curr_guard.Get()->GetPageId()
+                    << " has no child '" << ch << "'");
+                return result;
+            }
+
 
             page_id_t next_id = node->GetChild(ch);
+
+            // LOG_DEBUG("[Trie] Moving to child '" << ch << "' -> Page " << next_id); // Optional verbosity
             curr_guard = FetchPageGuard(next_id);
             if (!curr_guard.IsValid()) return result;
         }
 
         auto* node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
+
+        LOG_DEBUG("[Trie] Reached Target Node: " << curr_guard.Get()->GetPageId()
+            << " Terminal=" << node->IsTerminal());
 
         if (is_prefix) {
             // Collect subtree
@@ -291,11 +313,19 @@ namespace cmse::index {
         else {
             // Collect exact match
             if (node->IsTerminal()) {
+
                 page_id_t vp_id = node->GetValuePageId();
+                LOG_DEBUG("[Trie] Exact Match Found. ValuePage=" << vp_id);
                 curr_guard.Drop();
                 ScanValuePageChain(vp_id, result, priority_filter, min_ts, max_ts, cap);
             }
+            else {
+                LOG_DEBUG("[Trie] Key found but NOT Terminal (No values here)");
+            }
         }
+
+        LOG_DEBUG("[Trie] Search End. Found=" << result.timestamps.size()
+            << " Overflow=" << result.is_overflow);
         return result;
     }
 
@@ -308,7 +338,10 @@ namespace cmse::index {
         size_t cap)
     {
         while (vp_id != INVALID_PAGE_ID) {
-            if (result.is_overflow) return;
+            if (result.is_overflow) {
+                LOG_DEBUG("[Trie] Scan Abort: Already Overflowed");
+                return;
+            }
 
             PageGuard vp_guard = FetchPageGuard(vp_id);
             if (!vp_guard.IsValid()) break;
@@ -316,18 +349,27 @@ namespace cmse::index {
             auto* vp = reinterpret_cast<cmse::TrieValuePage*>(vp_guard.Get()->GetData());
             int count = vp->GetCount();
 
+            LOG_DEBUG("[Trie] Scan Abort: Already Overflowed");
+
             for (int i = 0; i < count; i++) {
                 TrieLogEntry entry = vp->GetEntry(i);
 
                 // Filter Check
-                if (priority_filter != -1 && entry.log_level != priority_filter) continue;
-                if (entry.timestamp < min_ts || entry.timestamp > max_ts) continue;
+                bool prio_ok = (priority_filter == -1 || entry.log_level == priority_filter);
+                bool time_ok = (entry.timestamp >= min_ts && entry.timestamp <= max_ts);
+
+                if (!prio_ok || !time_ok) {
+                    // LOG_DEBUG("[Trie] Skip: Prio=" << entry.log_level << " TS=" << entry.timestamp);
+                    continue;
+                }
 
                 // Add Candidate
                 result.timestamps.push_back(entry.timestamp);
 
                 // Cap Check
                 if (result.timestamps.size() > cap) {
+                    LOG_DEBUG("[Trie] CAP REACHED (" << cap << "). Mark Overflow.");
+
                     result.is_overflow = true;
 
                     // FIX: Do NOT clear. Just remove the extra one that exceeded the cap.
@@ -363,6 +405,10 @@ namespace cmse::index {
         }
 
         page_id_t vp_id = node->IsTerminal() ? node->GetValuePageId() : INVALID_PAGE_ID;
+
+        // Debug Log for non-empty nodes
+        // if (vp_id != INVALID_PAGE_ID) LOG_DEBUG("[Trie] Collect Node " << page_id << " has Values -> " << vp_id);
+
         guard.Drop(); // Drop lock before heavy work
 
         // 2. Process Values
