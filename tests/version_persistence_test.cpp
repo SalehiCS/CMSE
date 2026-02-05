@@ -49,7 +49,7 @@ public:
             }
 
             // Commit! (Max timestamp = 99)
-            vm.Commit(txn, 99);
+            vm.Commit(txn, 99,0);
 
             // Note: txn.pending_root_id is the root we expect to find later
             std::cout << "   -> Committed Root: " << txn.pending_root_id << std::endl;
@@ -105,7 +105,7 @@ public:
 
             // Add more data
             btree.InsertCoW(100, createRecord(100), txn);
-            vm.Commit(txn, 100);
+            vm.Commit(txn, 100,0);
 
             // Verify
             btree.SetRootPageId(vm.GetLatestRootPageId());

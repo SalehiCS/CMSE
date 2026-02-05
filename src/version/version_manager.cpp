@@ -26,15 +26,14 @@ namespace cmse {
         return txn;
     }
 
-    void VersionManager::Commit(TransactionContext& txn, int64_t max_log_ts) {
+    // In src/version/version_manager.cpp
+
+    // Update the function implementation
+    void VersionManager::Commit(TransactionContext& txn, int64_t max_log_ts, size_t file_offset) {
         std::lock_guard<std::mutex> guard(latch_);
 
-        // 1. SAFETY CRITICAL: Flush Data Pages First!
-        // If we write the commit record but the data pages are still only in RAM,
-        // a crash now would corrupt the DB.
-        for (page_id_t pid : txn.created_pages) {
-            bpm_->FlushPage(pid);
-        }
+        // 1. Flush to disk (User confirmed this works now)
+        bpm_->FlushAllPages();
 
         // 2. Prepare Metadata
         VersionMetadata meta;
@@ -42,25 +41,13 @@ namespace cmse {
         meta.root_page_id = txn.pending_root_id;
         meta.max_log_ts = max_log_ts;
         meta.timestamp = std::time(nullptr);
+        meta.file_offset = file_offset; // <--- Store the offset
 
-        // 3. Update Memory State
+        // 3. Update Memory & Disk
         versions_[meta.version_id] = meta;
+        if (meta.version_id >= next_version_id_) next_version_id_ = meta.version_id + 1;
 
-        // Ensure next ID is always higher than what we just committed
-        if (meta.version_id >= next_version_id_) {
-            next_version_id_ = meta.version_id + 1;
-        }
-
-        // 4. Persist Commit Record
         AppendVersionToDisk(meta);
-
-        // Clear transaction state (optional safety)
-        txn.created_pages.clear();
-        txn.shadow_map.clear();
-
-        std::cout << "[VersionManager] Committed v" << meta.version_id
-            << " | Root: " << meta.root_page_id
-            << " | MaxLogTS: " << max_log_ts << std::endl;
     }
 
     void VersionManager::LoadVersions() {

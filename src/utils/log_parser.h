@@ -23,6 +23,14 @@ namespace cmse::utils {
         // Keep the old static method for compatibility (optional, but good for small tests)
         static std::vector<LogRecord> parseLogFile(const std::string& filename);
 
+        // NEW: Jump instantly to a byte position
+        void SeekToPosition(size_t offset) {
+            if (infile_.is_open()) {
+                infile_.clear(); // Clear EOF/Fail flags
+                infile_.seekg(offset, std::ios::beg);
+            }
+        }
+
     private:
         std::ifstream infile_;
         std::string filename_;

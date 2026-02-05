@@ -19,6 +19,7 @@ namespace cmse {
         page_id_t root_page_id;
         int64_t timestamp;     // Wall clock time
         int64_t max_log_ts;    // The highest Log Timestamp ingested (for Resume)
+        size_t file_offset;
     };
 
     class VersionManager {
@@ -41,9 +42,14 @@ namespace cmse {
          * 2. Appends the VersionMetadata to the meta file.
          * @param max_log_ts The highest timestamp processed in this batch (for resume).
          */
-        void Commit(TransactionContext& txn, int64_t max_log_ts);
+         // Update Commit signature
+        void Commit(TransactionContext& txn, int64_t max_log_ts, size_t file_offset);
 
-        // --- Recovery / Query Helpers ---
+        // Add Getter
+        size_t GetLastFileOffset() const {
+            if (versions_.empty()) return 0;
+            return versions_.rbegin()->second.file_offset;
+        }
 
         version_id_t GetLatestVersionId() const;
 

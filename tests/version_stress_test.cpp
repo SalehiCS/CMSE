@@ -67,7 +67,7 @@ public:
             }
 
             // 4. Commit & "Crash" (Scope ends immediately after)
-            vm.Commit(txn, end_key - 1);
+            vm.Commit(txn, end_key - 1,0);
 
             std::cout << "Committed v" << txn.version_id << " with " << KEYS_PER_BATCH << " keys." << std::endl;
         }
