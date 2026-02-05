@@ -96,6 +96,10 @@ namespace cmse {
             return result;
         }
 
+        TrieLogEntry GetEntry(int index) const {
+            return entries_[index];
+        }
+
     private:
         // Helper to interpret the raw page data as the Header
         TrieValuePageHeader* GetHeader() const {

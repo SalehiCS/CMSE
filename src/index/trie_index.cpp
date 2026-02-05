@@ -250,4 +250,125 @@ namespace cmse::index {
         return results;
     }
 
+    // Add these implementations to trie_index.cpp
+
+    SearchResult TrieIndex::GetTimestampsWithCap(
+        const std::string& key,
+        bool is_prefix,
+        int32_t priority_filter,
+        int64_t min_ts,
+        int64_t max_ts,
+        size_t cap)
+    {
+        std::lock_guard<std::mutex> guard(latch_);
+        SearchResult result;
+
+        if (root_page_id_ == INVALID_PAGE_ID) return result;
+
+        PageGuard curr_guard = FetchPageGuard(root_page_id_);
+        if (!curr_guard.IsValid()) return result;
+
+        // 1. Traverse to node
+        for (char ch : key) {
+            auto* node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
+            if (!node->HasChild(ch)) return result;
+
+            page_id_t next_id = node->GetChild(ch);
+            curr_guard = FetchPageGuard(next_id);
+            if (!curr_guard.IsValid()) return result;
+        }
+
+        auto* node = reinterpret_cast<cmse::TriePage*>(curr_guard.Get()->GetData());
+
+        if (is_prefix) {
+            // Collect subtree
+            page_id_t start_node_id = curr_guard.Get()->GetPageId();
+            curr_guard.Drop();
+            CollectAllWithCap(start_node_id, result, priority_filter, min_ts, max_ts, cap);
+        }
+        else {
+            // Collect exact match
+            if (node->IsTerminal()) {
+                page_id_t vp_id = node->GetValuePageId();
+                curr_guard.Drop();
+                ScanValuePageChain(vp_id, result, priority_filter, min_ts, max_ts, cap);
+            }
+        }
+        return result;
+    }
+
+    void TrieIndex::ScanValuePageChain(
+        page_id_t vp_id,
+        SearchResult& result,
+        int32_t priority_filter,
+        int64_t min_ts,
+        int64_t max_ts,
+        size_t cap)
+    {
+        while (vp_id != INVALID_PAGE_ID) {
+            if (result.is_overflow) return;
+
+            PageGuard vp_guard = FetchPageGuard(vp_id);
+            if (!vp_guard.IsValid()) break;
+
+            auto* vp = reinterpret_cast<cmse::TrieValuePage*>(vp_guard.Get()->GetData());
+            int count = vp->GetCount();
+
+            for (int i = 0; i < count; i++) {
+                TrieLogEntry entry = vp->GetEntry(i);
+
+                // Filter Check
+                if (priority_filter != -1 && entry.log_level != priority_filter) continue;
+                if (entry.timestamp < min_ts || entry.timestamp > max_ts) continue;
+
+                // Add Candidate
+                result.timestamps.push_back(entry.timestamp);
+
+                // Cap Check
+                if (result.timestamps.size() > cap) {
+                    result.is_overflow = true;
+                    result.timestamps.clear();
+                    return;
+                }
+            }
+            vp_id = vp->GetNextPageId();
+        }
+    }
+
+    void TrieIndex::CollectAllWithCap(
+        page_id_t page_id,
+        SearchResult& result,
+        int32_t priority_filter,
+        int64_t min_ts,
+        int64_t max_ts,
+        size_t cap)
+    {
+        if (result.is_overflow) return;
+
+        PageGuard guard = FetchPageGuard(page_id);
+        if (!guard.IsValid()) return;
+
+        auto* node = reinterpret_cast<cmse::TriePage*>(guard.Get()->GetData());
+
+        // 1. Collect Children IDs (Read from page then drop lock)
+        std::vector<page_id_t> children;
+        for (int i = 0; i < TRIE_FANOUT; i++) {
+            char ch = static_cast<char>(i);
+            if (node->HasChild(ch)) children.push_back(node->GetChild(ch));
+        }
+
+        page_id_t vp_id = node->IsTerminal() ? node->GetValuePageId() : INVALID_PAGE_ID;
+        guard.Drop(); // Drop lock before heavy work
+
+        // 2. Process Values
+        if (vp_id != INVALID_PAGE_ID) {
+            ScanValuePageChain(vp_id, result, priority_filter, min_ts, max_ts, cap);
+        }
+
+        // 3. Recurse
+        for (page_id_t child : children) {
+            CollectAllWithCap(child, result, priority_filter, min_ts, max_ts, cap);
+            if (result.is_overflow) return;
+        }
+    }
 } // namespace cmse::index

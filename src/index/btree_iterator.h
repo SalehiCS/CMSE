@@ -11,30 +11,38 @@ namespace cmse {
         // Constructor that accepts an existing PageGuard (Move Ownership)
         BTreeIterator(bufferpool::BufferPoolManager* bpm,
             adapter::BTreeAdapter* adapter,
-            PageGuard&& start_guard, // <--- Accepts Guard
+            PageGuard&& start_guard,
             int start_index);
 
-        // --- NEW: Enable Move Semantics ---
-        BTreeIterator(BTreeIterator&& other) noexcept;            // Move Constructor
-        BTreeIterator& operator=(BTreeIterator&& other) noexcept; // Move Assignment
+        // Move Semantics
+        BTreeIterator(BTreeIterator&& other) noexcept;
+        BTreeIterator& operator=(BTreeIterator&& other) noexcept;
 
-        // DISABLE COPY (Because PageGuard cannot be copied)
+        // Disable Copy
         BTreeIterator(const BTreeIterator&) = delete;
         BTreeIterator& operator=(const BTreeIterator&) = delete;
 
-        // Destructor: Automatically unpins the held page
+        // 1. Dereference Operator
+        const LogRecord& operator*() {
+            return Current();
+        }
+
+        // 2. Arrow Operator
+        const LogRecord* operator->() {
+            return &Current();
+        }
+
+        // --- FIX HERE: Removed 'BTreeIterator::' ---
+        const LogRecord& Current();
+        // ------------------------------------------
+
         ~BTreeIterator();
 
-        // Check if we reached the end of the query or database
         bool IsEnd();
 
-        // Access the current record
-        LogRecord& Current();
-
-        // Move to next record (Prefix ++it)
+        // Move to next record
         BTreeIterator& operator++();
 
-        // Helper to close iterator early if needed
         void Close();
 
     private:

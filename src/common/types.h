@@ -28,6 +28,17 @@ namespace cmse {
         char host[32];
         char message[200];
 
+        // --- ADD THIS HELPER METHOD ---
+        void Set(int64_t ts, int32_t prio, const char* src, const char* hst, const char* msg) {
+            timestamp = ts;
+            priority = prio;
+            pid = 0; // Default
+            strncpy_s(source, src, _TRUNCATE);
+            strncpy_s(host, hst, _TRUNCATE);
+            strncpy_s(message, msg, _TRUNCATE);
+        }
+        // -----------------------------
+
         std::string toString() const {
             return "TS:" + std::to_string(timestamp) + " | MSG:" + std::string(message);
         }

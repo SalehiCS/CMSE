@@ -182,3 +182,6 @@ add_executable(version_stress_test tests/version_stress_test.cpp)
 target_link_libraries(version_stress_test PRIVATE cmse_core)
 add_test(NAME VersionStressTest COMMAND version_stress_test)
 
+add_executable(query_test tests/query_test.cpp)
+target_link_libraries(query_test PRIVATE cmse_core)
+add_test(NAME QueryTest COMMAND query_test)

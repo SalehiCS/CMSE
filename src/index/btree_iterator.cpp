@@ -38,11 +38,6 @@ namespace cmse {
         return is_end_;
     }
 
-    LogRecord& BTreeIterator::Current() {
-        // Use -> arrow syntax (thanks to operator->)
-        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_guard_->GetData());
-        return leaf->values[curr_index_];
-    }
 
     BTreeIterator& BTreeIterator::operator++() {
         if (is_end_) return *this;
@@ -109,6 +104,13 @@ namespace cmse {
             other.is_end_ = true;
         }
         return *this;
+    }
+
+    // --- Implementation of Current ---
+    const LogRecord& BTreeIterator::Current() {
+        // Access via .Get() since PageGuard holds the pointer
+        auto* leaf = reinterpret_cast<adapter::BPlusLeafNode*>(curr_guard_.Get()->GetData());
+        return leaf->values[curr_index_];
     }
 
 } // namespace cmse

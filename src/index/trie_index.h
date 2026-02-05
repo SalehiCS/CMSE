@@ -10,6 +10,11 @@
 
 namespace cmse::index {
 
+    struct SearchResult {
+        bool is_overflow = false;
+        std::vector<int64_t> timestamps;
+    };
+
     class TrieIndex {
     public:
         explicit TrieIndex(cmse::bufferpool::BufferPoolManager* bpm);
@@ -23,6 +28,14 @@ namespace cmse::index {
         page_id_t GetRootId() const { return root_page_id_; }
         void SetRootPageId(page_id_t root_id) { root_page_id_ = root_id; }
 
+        SearchResult GetTimestampsWithCap(
+            const std::string& key,
+            bool is_prefix,
+            int32_t priority_filter, // -1 for ANY
+            int64_t min_ts,
+            int64_t max_ts,
+            size_t cap
+        );
     private:
         cmse::bufferpool::BufferPoolManager* bpm_;
         page_id_t root_page_id_;
@@ -36,6 +49,26 @@ namespace cmse::index {
 
         // Helper: Fetches a page and wraps it in a Guard immediately
         PageGuard FetchPageGuard(page_id_t page_id);
+
+        // Recursive helper for the Cap logic
+        void CollectAllWithCap(
+            page_id_t page_id,
+            SearchResult& result,
+            int32_t priority_filter,
+            int64_t min_ts,
+            int64_t max_ts,
+            size_t cap
+        );
+
+        // Helper to process a specific Value Page Chain
+        void ScanValuePageChain(
+            page_id_t vp_id,
+            SearchResult& result,
+            int32_t priority_filter,
+            int64_t min_ts,
+            int64_t max_ts,
+            size_t cap
+        );
     };
 
 } // namespace cmse::index

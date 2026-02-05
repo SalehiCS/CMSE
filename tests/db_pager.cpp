@@ -32,7 +32,7 @@ void RunPagerQuery(BTreeIndex* index, int64_t start_ts) {
 
     while (!it.IsEnd() && !quit) {
         // 2. Fetch Current Record
-        LogRecord& rec = it.Current();
+        LogRecord rec = it.Current();
 
         // 3. Print Formatted Row
         std::cout << "[" << std::setw(14) << rec.timestamp << "] | "

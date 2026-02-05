@@ -78,7 +78,7 @@ public:
         int count = 0;
 
         while (!it.IsEnd() && count < 205) {
-            LogRecord& rec = it.Current();
+            LogRecord rec = it.Current();
             if (count >= 199) {
                 std::cout << "   Item[" << count << "] TS: " << rec.timestamp << std::endl;
             }
