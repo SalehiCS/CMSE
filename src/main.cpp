@@ -12,7 +12,7 @@ void PrintHelp() {
     std::cout << "  exit          : Quit" << std::endl;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     // 1. Check for -g argument
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
