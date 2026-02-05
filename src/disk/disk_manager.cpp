@@ -105,8 +105,6 @@ namespace cmse {
             std::lock_guard<std::mutex> lock(db_io_latch_);
             size_t offset = static_cast<size_t>(page_id) * PAGE_SIZE;
 
-            // [LOGGING] Verify we are actually writing to the file
-            std::cout << "[Disk] Writing Page " << page_id << " @ Offset " << offset << std::endl;
 
             fseek(db_file_, (long)offset, SEEK_SET);
             size_t written = fwrite(data, 1, PAGE_SIZE, db_file_);

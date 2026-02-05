@@ -217,8 +217,6 @@ namespace cmse {
             for (auto const& [pid, fid] : page_table_) {
                 Page* page = &pages_[fid];
                 if (page->is_dirty_) {
-                    // [LOGGING] Identify exactly which pages are being saved
-                    std::cout << "[BPM] Flushing Dirty Page: " << pid << std::endl;
 
                     // Used GetHeader() as requested
                     disk_manager_->WritePage(pid, reinterpret_cast<char*>(page->GetHeader()));

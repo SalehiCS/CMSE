@@ -627,8 +627,8 @@ namespace cmse::index
 
         std::memcpy(new_guard.Get()->GetData(), old_guard.Get()->GetData(), PAGE_SIZE);
 
-        auto* header = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_guard.Get()->GetData());
-        header->is_dirty = 1;
+
+        new_guard.SetDirty(true);
 
         txn.RegisterShadow(page_id, new_id);
 
@@ -647,6 +647,8 @@ namespace cmse::index
             if (!root_guard.IsValid()) return false;
 
             adapter_.initLeaf(root_guard.Get());
+
+            root_guard.SetDirty(true);
 
             // Fix loop bug (ensure -1)
             auto* leaf = reinterpret_cast<cmse::adapter::BPlusLeafNode*>(root_guard.Get()->GetData());
@@ -789,6 +791,9 @@ namespace cmse::index
             page_id_t p_sibling_id;
             PageGuard p_sibling_guard(bpm_, bpm_->NewPage(p_sibling_id));
             if (!p_sibling_guard.IsValid()) return;
+
+            p_sibling_guard.SetDirty(true);
+
             txn.created_pages.push_back(p_sibling_id);
 
             cmse::adapter::SplitResult p_result;
