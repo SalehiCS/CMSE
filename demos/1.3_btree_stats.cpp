@@ -54,10 +54,10 @@ void TestPruning(adapter::BTreeAdapter& adapter, page_id_t page_id, int64_t q_mi
 
     std::cout << "  Query [" << std::setw(4) << q_min << " - " << std::setw(4) << q_max << "] ";
     if (skip) {
-        std::cout << " -> \033[1;31m🔴 SKIP\033[0m  (Pruned by Metadata)" << std::endl;
+        std::cout << " -> \033[1;31m SKIP\033[0m  (Pruned by Metadata)" << std::endl;
     }
     else {
-        std::cout << " -> \033[1;32m🟢 ENTER\033[0m (Range Overlap)" << std::endl;
+        std::cout << " -> \033[1;32m ENTER\033[0m (Range Overlap)" << std::endl;
     }
 }
 
