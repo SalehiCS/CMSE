@@ -8,96 +8,53 @@ namespace cmse::utils {
 
     /**
      * LogParser
-     * Responsible for the heavy lifting of ingestion. It transforms human-readable
-     * log files into the engine's internal LogRecord binary format.
-     * Features: Batch processing, file seeking, and progress tracking.
+     * Handles the ingestion of raw text logs into structured binary LogRecords.
+     * Maintains precise byte offsets to support Crash Recovery and Resume.
      */
     class LogParser {
     public:
-        /**
-         * Constructor: Initializes the ingestion stream.
-         * @param filename Path to the raw .log or .txt file.
-         */
+        // Initialize parser with a specific file path.
         explicit LogParser(const std::string& filename);
 
-        /**
-         * Destructor: Ensures the input file stream is safely closed.
-         */
+        // Clean up file handles.
         ~LogParser();
 
-        /**
-         * GetNextBatch
-         * Performance-oriented method to read logs in chunks rather than loading
-         * the entire file into memory at once.
-         * @param out_records Vector to be populated with parsed LogRecords.
-         * @param max_records Maximum number of records to ingest in this specific call.
-         * @return false if the end of the file (EOF) is reached; true if more data remains.
-         */
+        // Fetches a specific number of records (batch) from the file.
+        // Returns false if EOF is reached.
         bool GetNextBatch(std::vector<LogRecord>& out_records, size_t max_records = 100000);
 
-        /**
-         * GetTotalFileSize
-         * Calculates the total size of the source file in bytes. Useful for calculating
-         * percentage-based progress during large ingestions.
-         */
+        // Returns the total size of the file (for progress bars).
         size_t GetTotalFileSize() const;
 
         /**
          * GetCurrentPosition
-         * Returns the current byte offset within the file stream.
+         * CRITICAL FIX: Returns the byte offset of the *next* record to be fully processed.
+         * If we are mid-parse, this returns the start of the current pending record,
+         * ensuring that a Resume operation re-reads the header correctly.
          */
         size_t GetCurrentPosition();
 
-        /**
-         * parseLogFile
-         * Legacy static utility for small-scale testing where batching is not required.
-         * @param filename Path to the file to be parsed.
-         * @return A vector containing all records from the file.
-         */
+        // Seeks the file pointer to a specific byte (for Resume).
+        void SeekToPosition(size_t offset);
+
+        // Legacy helper for one-shot loading.
         static std::vector<LogRecord> parseLogFile(const std::string& filename);
 
-        /**
-         * SeekToPosition
-         * Instantly jumps the file pointer to a specific byte offset. Essential for
-         * resuming interrupted ingestions or parallelizing file reading.
-         * @param offset The byte position from the beginning of the file.
-         */
-        void SeekToPosition(size_t offset) {
-            if (infile_.is_open()) {
-                // Reset stream state (essential if previous operations hit EOF or errors)
-                infile_.clear();
-                // Perform the absolute seek from the beginning of the file
-                infile_.seekg(offset, std::ios::beg);
-            }
-        }
-
     private:
-        std::ifstream infile_;             // The active file input stream handle
-        std::string filename_;            // Storage for the source file path
-        size_t file_size_ = 0;            // Cached total file size in bytes
+        std::ifstream infile_;             // Handle to the source file.
+        std::string filename_;             // Path to the file.
+        size_t file_size_ = 0;             // Total bytes in file.
 
-        // Internal temporary state to handle multi-line log parsing logic
-        LogRecord current_record_;        // Current record being assembled
-        bool inside_record_ = false;      // State flag for multi-line parsing transitions
+        // --- State Tracking ---
+        LogRecord current_record_;         // Buffer for the record being built.
+        bool inside_record_ = false;       // Flag: Are we currently parsing a multiline entry?
 
-        // --- INTERNAL UTILITIES ---
+        // FIX: Tracks the byte offset where 'current_record_' started.
+        size_t last_record_offset_ = 0;
 
-        /**
-         * trim
-         * Removes whitespace from the beginning and end of extracted log strings.
-         */
+        // --- Internal Helpers ---
         static std::string trim(const std::string& str);
-
-        /**
-         * parseMetadataLine
-         * Extracts specific fields (Timestamp, Host, Level) from a single line of text.
-         */
         static void parseMetadataLine(const std::string& line, LogRecord& current_record);
-
-        /**
-         * resetRecord
-         * Zeroes out a LogRecord struct to ensure no data leaks between different entries.
-         */
         void resetRecord(LogRecord& r);
     };
 
