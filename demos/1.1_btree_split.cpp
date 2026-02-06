@@ -59,6 +59,7 @@ int main() {
     btree->PrintTree(20);
 
     std::cout << "\n[Trigger] Inserting key 2000 to cause FIRST SPLIT..." << std::endl;
+    std::cout << "           Press ENTER to insert..." << std::endl;
     std::cin.get();
 
     btree->Insert(2000, logs[0]);
