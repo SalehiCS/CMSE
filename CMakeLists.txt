@@ -84,10 +84,18 @@ target_include_directories(1.3_btree_stats_debug PRIVATE src)
 target_link_libraries(1.3_btree_stats_debug PRIVATE Threads::Threads)
 
 
-# Demo 1.3: Trie Split
+# Demo 2.1: Trie Split
 add_executable(2.1_trie_split_debug 
     demos/2.1_trie_split.cpp 
     ${CORE_SOURCES} 
 )
 target_include_directories(2.1_trie_split_debug PRIVATE src)
 target_link_libraries(2.1_trie_split_debug PRIVATE Threads::Threads)
+
+# Demo 2.2: Trie Cap Safety
+add_executable(2.2_trie_cap_debug 
+    demos/2.2_trie_cap_safety.cpp 
+    ${CORE_SOURCES} 
+)
+target_include_directories(2.2_trie_cap_debug PRIVATE src)
+target_link_libraries(2.2_trie_cap_debug PRIVATE Threads::Threads)
