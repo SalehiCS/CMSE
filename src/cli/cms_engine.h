@@ -5,6 +5,7 @@
 #include <sstream>
 #include <chrono>
 #include <limits> 
+#include <algorithm>
 
 #include "../disk/disk_manager.h"
 #include "../bufferpool/buffer_pool_manager.h"
@@ -14,6 +15,8 @@
 #include "../query/query_engine.h"
 #include "../utils/log_parser.h"
 #include "../common/logger.h"
+#include "../utils/time_utils.h"
+
 
 namespace cmse {
 
@@ -209,6 +212,27 @@ namespace cmse {
             std::string segment;
             bool valid = false;
 
+            // Helper Lambda: Parses either a raw number (Microseconds) OR a Date String
+            auto ParseTimeOrDate = [](std::string val) -> int64_t {
+                // 1. Check if it is a pure integer (Raw Timestamp)
+                // Note: With microseconds, these numbers will be huge (e.g. 1766703747000000)
+                // We assume valid raw input is just digits.
+                if (std::all_of(val.begin(), val.end(), ::isdigit)) {
+                    return std::stoll(val);
+                }
+
+                // 2. It's a date string. 
+                // Handle the CLI underscore trick: "2025-12-25_23:02:27.575" -> "2025-12-25 23:02:27.575"
+                std::replace(val.begin(), val.end(), '_', ' ');
+
+                // 3. Use the Utils to parse (Handles microseconds automatically)
+                int64_t ts = cmse::utils::TimeUtils::StringToTimestamp(val);
+                if (ts == -1) {
+                    throw std::runtime_error("Invalid date format: " + val);
+                }
+                return ts;
+                };
+
             while (ss >> segment) {
                 size_t eq_pos = segment.find('=');
                 if (eq_pos == std::string::npos) continue;
@@ -220,15 +244,35 @@ namespace cmse {
                 else if (key == "host") { q.host = val; valid = true; }
                 else if (key == "msg") { q.message_contains = val; valid = true; }
                 else if (key == "prio") { q.priority = std::stoi(val); valid = true; }
+
+                // --- NEW: Safe Time Filters (Recommended for Dates) ---
+                else if (key == "min_timestamp" || key == "min") {
+                    q.min_timestamp = ParseTimeOrDate(val);
+                    valid = true;
+                }
+                else if (key == "max_timestamp" || key == "max") {
+                    q.max_timestamp = ParseTimeOrDate(val);
+                    valid = true;
+                }
+
+                // --- LEGACY: Combined Time Range (Integers Only) ---
+                // Warning: This key is risky for dates like '2026-01-01' because 
+                // splitting by '-' is ambiguous. Use min/max keys for dates instead.
                 else if (key == "time") {
                     size_t dash = val.find('-');
                     if (dash != std::string::npos) {
-                        q.min_timestamp = std::stoll(val.substr(0, dash));
-                        q.max_timestamp = std::stoll(val.substr(dash + 1));
+                        // We assume these are raw timestamps for safety here
+                        std::string start_s = val.substr(0, dash);
+                        std::string end_s = val.substr(dash + 1);
+
+                        // Use the same helper (works if user is careful with format)
+                        q.min_timestamp = ParseTimeOrDate(start_s);
+                        q.max_timestamp = ParseTimeOrDate(end_s);
                         valid = true;
                     }
                 }
             }
+
             if (!valid) throw std::runtime_error("No valid keys found");
             return q;
         }
