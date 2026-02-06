@@ -72,3 +72,13 @@ add_executable(1.2_btree_internal_split_debug
 
 target_include_directories(1.2_btree_internal_split_debug PRIVATE src)
 target_link_libraries(1.2_btree_internal_split_debug PRIVATE Threads::Threads)
+
+
+# Demo 1.3: Statistics Propagation
+add_executable(1.3_btree_stats_debug 
+    demos/1.3_btree_stats.cpp 
+    ${CORE_SOURCES} 
+)
+
+target_include_directories(1.3_btree_stats_debug PRIVATE src)
+target_link_libraries(1.3_btree_stats_debug PRIVATE Threads::Threads)
