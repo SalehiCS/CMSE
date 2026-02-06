@@ -6,51 +6,91 @@
 
 namespace cmse {
 
+    /**
+     * BTreeIterator
+     * Provides a stateful, forward-only iterator for linear range scans across leaf nodes.
+     * Uses RAII via PageGuard to maintain buffer pool pins during traversal.
+     */
     class BTreeIterator {
     public:
-        // Constructor that accepts an existing PageGuard (Move Ownership)
+        /**
+         * Constructor
+         * @param bpm Pointer to the global Buffer Pool Manager.
+         * @param adapter Pointer to the BTree logic adapter for node interpretation.
+         * @param start_guard A PageGuard holding the initial leaf page (takes ownership).
+         * @param start_index The starting slot index within the initial leaf.
+         */
         BTreeIterator(bufferpool::BufferPoolManager* bpm,
             adapter::BTreeAdapter* adapter,
             PageGuard&& start_guard,
             int start_index);
 
-        // Move Semantics
+        /**
+         * Move Semantics
+         * Allows transferring ownership of the iterator and its internal PageGuard pin.
+         */
         BTreeIterator(BTreeIterator&& other) noexcept;
         BTreeIterator& operator=(BTreeIterator&& other) noexcept;
 
-        // Disable Copy
+        /**
+         * Copying is disabled to prevent multiple iterators from attempting to
+         * manage the same PageGuard pin simultaneously.
+         */
         BTreeIterator(const BTreeIterator&) = delete;
         BTreeIterator& operator=(const BTreeIterator&) = delete;
 
-        // 1. Dereference Operator
+        /**
+         * Dereference Operator
+         * Returns a reference to the LogRecord at the current iterator position.
+         */
         const LogRecord& operator*() {
             return Current();
         }
 
-        // 2. Arrow Operator
+        /**
+         * Arrow Operator
+         * Provides pointer-like access to the member fields of the current LogRecord.
+         */
         const LogRecord* operator->() {
             return &Current();
         }
 
-        // --- FIX HERE: Removed 'BTreeIterator::' ---
+        /**
+         * Current
+         * Accesses the specific LogRecord within the current pinned leaf page.
+         */
         const LogRecord& Current();
-        // ------------------------------------------
 
+        /**
+         * Destructor
+         * Relies on PageGuard's destructor to automatically unpin the current page.
+         */
         ~BTreeIterator();
 
+        /**
+         * IsEnd
+         * Returns true if the iterator has exhausted all records in the tree.
+         */
         bool IsEnd();
 
-        // Move to next record
+        /**
+         * Prefix Increment Operator (++it)
+         * Advances the iterator to the next record, potentially crossing leaf boundaries.
+         */
         BTreeIterator& operator++();
 
+        /**
+         * Close
+         * Manually terminates the iterator and releases any held buffer pool pins.
+         */
         void Close();
 
     private:
-        bufferpool::BufferPoolManager* bpm_;
-        adapter::BTreeAdapter* adapter_;
-        PageGuard curr_guard_;
-        int curr_index_;
-        bool is_end_;
+        bufferpool::BufferPoolManager* bpm_;      // Reference to the pool for fetching next pages.
+        adapter::BTreeAdapter* adapter_;          // Helper for parsing node structure.
+        PageGuard curr_guard_;                    // RAII handle for the currently pinned leaf page.
+        int curr_index_;                          // The current record slot index within the leaf.
+        bool is_end_;                             // Flag indicating if traversal is complete.
     };
 
 } // namespace cmse
