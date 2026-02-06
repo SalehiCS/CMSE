@@ -99,3 +99,11 @@ add_executable(2.2_trie_cap_debug
 )
 target_include_directories(2.2_trie_cap_debug PRIVATE src)
 target_link_libraries(2.2_trie_cap_debug PRIVATE Threads::Threads)
+
+# Demo 2.3: Shadow Paging
+add_executable(3.1_shadow_paging_debug 
+    demos/3.1_mvcc_shadow_paging.cpp 
+    ${CORE_SOURCES} 
+)
+target_include_directories(3.1_shadow_paging_debug PRIVATE src)
+target_link_libraries(3.1_shadow_paging_debug PRIVATE Threads::Threads)
