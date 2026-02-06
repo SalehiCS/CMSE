@@ -62,3 +62,13 @@ add_executable(1.1_btree_split_debug
 target_include_directories(1.1_btree_split_debug PRIVATE src)
 # Link threads (since we aren't using cmse_core which usually handles this)
 target_link_libraries(1.1_btree_split_debug PRIVATE Threads::Threads)
+
+
+# Demo 1.2: Internal Split Debug Target
+add_executable(1.2_btree_internal_split_debug 
+    demos/1.2_btree_internal_split.cpp 
+    ${CORE_SOURCES} 
+)
+
+target_include_directories(1.2_btree_internal_split_debug PRIVATE src)
+target_link_libraries(1.2_btree_internal_split_debug PRIVATE Threads::Threads)
