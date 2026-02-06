@@ -82,3 +82,12 @@ add_executable(1.3_btree_stats_debug
 
 target_include_directories(1.3_btree_stats_debug PRIVATE src)
 target_link_libraries(1.3_btree_stats_debug PRIVATE Threads::Threads)
+
+
+# Demo 1.3: Trie Split
+add_executable(2.1_trie_split_debug 
+    demos/2.1_trie_split.cpp 
+    ${CORE_SOURCES} 
+)
+target_include_directories(2.1_trie_split_debug PRIVATE src)
+target_link_libraries(2.1_trie_split_debug PRIVATE Threads::Threads)
