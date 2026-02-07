@@ -78,3 +78,6 @@ target_link_libraries(3.2_crash_recovery PRIVATE cmse_core)
 
 add_executable(4.1_eviction_test demos/4.1_eviction_test.cpp)
 target_link_libraries(4.1_eviction_test PRIVATE cmse_core)
+
+add_executable(5.1_leaf_jump demos/5.1_leaf_jump.cpp)
+target_link_libraries(5.1_leaf_jump PRIVATE cmse_core)
