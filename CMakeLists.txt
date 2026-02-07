@@ -12,6 +12,9 @@ find_package(Threads REQUIRED)
 # Set output directory for binaries
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+
+
+
 # ------------------------------------------------------------------------------
 # 1. Core Library
 # ------------------------------------------------------------------------------
@@ -72,3 +75,6 @@ target_link_libraries(3.1_mvcc_shadow_paging PRIVATE cmse_core)
 
 add_executable(3.2_crash_recovery demos/3.2_crash_recovery.cpp)
 target_link_libraries(3.2_crash_recovery PRIVATE cmse_core)
+
+add_executable(4.1_eviction_test demos/4.1_eviction_test.cpp)
+target_link_libraries(4.1_eviction_test PRIVATE cmse_core)
