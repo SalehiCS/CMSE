@@ -4,146 +4,158 @@
 #include <sstream>
 #include <cstring>
 #include <algorithm>
+#include <iomanip> // Provides std::get_time for parsing date/time strings.
+#include <ctime>   // Provides std::mktime for converting time structures to epoch.
 
 namespace cmse::utils {
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Constructor: LogParser
-    // Initializes the file stream in Binary Mode to ensure byte-perfect seek operations.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Internal helper to extract a microsecond-precision timestamp from the log header line.
+     * Format expected: "Day YYYY-MM-DD HH:MM:SS.uuuuuu"
+     */
+    static int64_t ParseHeaderTimestamp(const std::string& line) {
+        try {
+            // Locate the first space character to skip the day name (e.g., "Thu ").
+            size_t first_space = line.find(' ');
+            // Validate that the space exists and there is enough remaining string for a date.
+            if (first_space == std::string::npos || first_space + 20 > line.size()) return -1;
+
+            // Extract the core date and time component: "YYYY-MM-DD HH:MM:SS".
+            std::string datetime_str = line.substr(first_space + 1, 19);
+
+            std::tm tm = {};              // Initialize time structure to zero.
+            std::istringstream ss(datetime_str);
+            // Parse the string into the tm struct using the standard format.
+            ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+
+            // Return error sentinel if parsing the date string failed.
+            if (ss.fail()) return -1;
+
+            // Convert the parsed calendar time into seconds since the Unix epoch.
+            time_t seconds = std::mktime(&tm);
+            if (seconds == -1) return -1;
+
+            // Convert seconds to microseconds as the base for the final timestamp.
+            int64_t total_micros = static_cast<int64_t>(seconds) * 1000000;
+
+            // Locate the decimal point to find the microsecond fractional part.
+            size_t dot_pos = line.find('.', first_space + 19);
+            if (dot_pos != std::string::npos) {
+                // Find the space following the microsecond digits.
+                size_t space_after = line.find(' ', dot_pos);
+                if (space_after != std::string::npos) {
+                    // Isolate the fractional string (e.g., "575408").
+                    std::string us_str = line.substr(dot_pos + 1, space_after - dot_pos - 1);
+
+                    // Normalize the string to exactly 6 digits to ensure correct microsecond value.
+                    if (us_str.length() > 6) us_str = us_str.substr(0, 6);
+                    while (us_str.length() < 6) us_str += '0';
+
+                    // Add the fractional microseconds to the total epoch value.
+                    total_micros += std::stoi(us_str);
+                }
+            }
+            return total_micros;
+        }
+        catch (...) {
+            // Return sentinel on any parsing exception.
+            return -1;
+        }
+    }
+
+    /**
+     * @brief Constructor: Opens the file in binary mode and calculates total file size.
+     */
     LogParser::LogParser(const std::string& filename) : filename_(filename) {
-        // Open the file using the binary flag to prevent newline translation (CRLF -> LF).
-        // This is critical for tellg() to return physical byte offsets matching the disk.
+        // Open in binary mode to ensure seek/tell operations match physical byte offsets.
         infile_.open(filename, std::ios::in | std::ios::binary);
 
-        // Check if the file successfully opened.
         if (infile_.is_open()) {
-            // Move the file pointer to the very end of the file.
+            // Seek to the end to determine the total size of the file.
             infile_.seekg(0, std::ios::end);
-
-            // Record the current position (which is now the file size) in bytes.
             file_size_ = infile_.tellg();
-
-            // Move the file pointer back to the beginning to prepare for reading.
+            // Reset to the beginning for subsequent reading.
             infile_.seekg(0, std::ios::beg);
         }
 
-        // Initialize the temporary record buffer to a clean, empty state.
+        // Initialize the internal state and buffers.
         resetRecord(current_record_);
-
-        // Initialize the tracking offset to 0 since we haven't processed anything yet.
         last_record_offset_ = 0;
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Destructor: ~LogParser
-    // Ensures system resources are released when the parser goes out of scope.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Destructor: Closes the file handle if it remains open.
+     */
     LogParser::~LogParser() {
-        // Check if the file stream is currently open.
         if (infile_.is_open()) {
-            // Close the file stream explicitly.
             infile_.close();
         }
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: GetTotalFileSize
-    // Simple accessor to retrieve the total size of the log file.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Returns the total size of the opened log file in bytes.
+     */
     size_t LogParser::GetTotalFileSize() const {
-        // Return the cached file size calculated during construction.
         return file_size_;
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: GetCurrentPosition
-    // Returns the safe "Resume Point" for persistence.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Returns the current byte offset in the file for resuming later.
+     */
     size_t LogParser::GetCurrentPosition() {
-        // If we are currently in the middle of parsing a record, return its start offset.
-        // This ensures that if we save state now, we resume from the *header* of this record.
+        // If we are currently parsing fields for a record, return the start of that record.
         if (inside_record_) {
             return last_record_offset_;
         }
-
-        // If we are not inside a record (e.g., between records), return the raw stream pointer.
+        // Otherwise, return the current read pointer of the file stream.
         if (infile_.is_open()) {
             return (size_t)infile_.tellg();
         }
-
-        // If file is not open, return 0.
         return 0;
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: resetRecord
-    // Zeroes out the LogRecord struct to prevent data leakage between iterations.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Clears a LogRecord structure to its default state.
+     */
     void LogParser::resetRecord(LogRecord& r) {
-        // Set timestamp to -1 (Sentinel value) to indicate "Uninitialized".
-        // We cannot use 0 because 0 is a valid Unix timestamp.
-        r.timestamp = -1;
-
-        // Reset priority to default (0).
-        r.priority = 0;
-
-        // Reset Process ID to default (0).
-        r.pid = 0;
-
-        // Zero out the source buffer memory.
+        r.timestamp = -1; // -1 indicates the timestamp has not been set yet.
+        r.priority = 0;   // Default priority.
+        r.pid = 0;        // Default process ID.
+        // Wipe all fixed-size character arrays.
         std::memset(r.source, 0, sizeof(r.source));
-
-        // Zero out the host buffer memory.
         std::memset(r.host, 0, sizeof(r.host));
-
-        // Zero out the message buffer memory.
         std::memset(r.message, 0, sizeof(r.message));
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: GetNextBatch
-    // The core logic. Reads lines from the file until a batch limit is reached.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Parses the next batch of log records from the file up to max_records.
+     */
     bool LogParser::GetNextBatch(std::vector<LogRecord>& out_records, size_t max_records) {
-        // Guard Clause: If file is closed or EOF reached, return false immediately.
+        // Validate stream status.
         if (!infile_.is_open() || infile_.eof()) return false;
 
-        // String buffer to hold the current line being read.
         std::string line;
-
-        // Clear the output vector to ensure we don't append to old data.
         out_records.clear();
+        out_records.reserve(max_records); // Pre-allocate memory for performance.
 
-        // Reserve memory upfront to avoid costly reallocations during the loop.
-        out_records.reserve(max_records);
-
-        // Loop until we fill the batch or run out of lines in the file.
         while (out_records.size() < max_records) {
-
-            // Capture the exact file byte offset BEFORE reading the line.
-            // This position marks the potential start of a new record header.
+            // Track the starting position of the current line before reading it.
             size_t line_start_pos = (size_t)infile_.tellg();
 
-            // Read the next line from the file. If reading fails (EOF), break the loop.
+            // Attempt to read a line; exit loop if EOF is encountered.
             if (!std::getline(infile_, line)) break;
 
-            // Handle potential Windows-style CRLF line endings.
-            // If the line ends with '\r', remove it to normalize to Unix style.
+            // Strip trailing carriage returns for Windows/DOS file compatibility.
             if (!line.empty() && line.back() == '\r') line.pop_back();
 
-            // Find the index of the first non-whitespace character.
+            // Skip lines that contain only whitespace.
             size_t first_char = line.find_first_not_of(" \t");
-
-            // If the line is purely whitespace, skip it.
             if (first_char == std::string::npos) continue;
 
-            // Determine if the line is indented (starts with whitespace).
-            // In systemd-export format, indented lines belong to the previous key/value.
+            // Indented lines (leading whitespace) signify continuation of the previous record.
             bool is_indented = (first_char > 0);
 
-            // Check if this line looks like a Record Header (e.g., "Mon 2026...").
-            // It must NOT be indented, and it must start with a Day Name.
+            // Determine if the line is the start of a new record by checking for day prefixes.
             bool is_new_record_start = !is_indented && (
                 line.rfind("Thu", 0) == 0 || line.rfind("Wed", 0) == 0 ||
                 line.rfind("Mon", 0) == 0 || line.rfind("Tue", 0) == 0 ||
@@ -151,158 +163,117 @@ namespace cmse::utils {
                 line.rfind("Sun", 0) == 0
                 );
 
-            // If we detected a new record header...
             if (is_new_record_start) {
-                // Check if we were already building a record in the buffer.
-                // Also check if the timestamp is valid (!= -1) to avoid pushing empty/bad records.
+                // If we were already building a valid record, commit it to the batch now.
                 if (inside_record_ && current_record_.timestamp != -1) {
-                    // Push the completed record into the output batch.
                     out_records.push_back(current_record_);
                 }
 
-                // Reset the temporary buffer to prepare for the NEW record.
+                // Prepare the buffer for the new record.
                 resetRecord(current_record_);
-
-                // Set the flag indicating we are now actively parsing a record.
                 inside_record_ = true;
-
-                // CRITICAL: Update the state tracker to point to the start of THIS new record.
                 last_record_offset_ = line_start_pos;
+
+                // Extract a fallback timestamp from the header. This prevents record loss if
+                // the explicit _SOURCE_REALTIME_TIMESTAMP field is missing in the metadata.
+                current_record_.timestamp = ParseHeaderTimestamp(line);
             }
-            // If it's not a header, but we are inside a record context...
             else if (inside_record_) {
-                // Parse the line as a Metadata Key=Value pair.
+                // If we are within a record context, parse the line as a key=value pair.
                 parseMetadataLine(line, current_record_);
             }
         }
 
-        // Post-Loop Check: Handle the very last record in the file.
-        // If EOF was hit, the loop breaks, but the last record is still sitting in 'current_record_'.
+        // Final check: if EOF was reached, commit the final record currently in the buffer.
         if (infile_.eof() && inside_record_ && current_record_.timestamp != -1) {
-            // Push the final record to the batch.
             out_records.push_back(current_record_);
-
-            // Reset the buffer to prevent double-pushing if called again.
             resetRecord(current_record_);
-
-            // Mark that we are no longer inside a record.
             inside_record_ = false;
         }
 
-        // Return true if we found at least one record; otherwise false.
+        // Return true if any records were added to this batch.
         return !out_records.empty();
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: parseMetadataLine
-    // Parses a single line of "KEY=VALUE" and updates the struct fields.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Parses a metadata line in "KEY=VALUE" format and assigns to LogRecord fields.
+     */
     void LogParser::parseMetadataLine(const std::string& line, LogRecord& record) {
-        // Find the position of the '=' separator.
+        // Locate the assignment operator.
         size_t eq_pos = line.find('=');
-
-        // If no '=' is found, ignore the line.
         if (eq_pos == std::string::npos) return;
 
-        // Extract the Key substring and trim whitespace.
+        // Extract key and value strings, removing surrounding whitespace.
         std::string key = trim(line.substr(0, eq_pos));
-
-        // Extract the Value substring and trim whitespace.
         std::string value = trim(line.substr(eq_pos + 1));
 
-        // Map specific keys to LogRecord fields.
         if (key == "_SOURCE_REALTIME_TIMESTAMP") {
-            // Try converting value to long long; if fail, set to sentinel -1.
-            try { record.timestamp = std::stoll(value); }
-            catch (...) { record.timestamp = -1; }
+            try {
+                // If the explicit high-precision timestamp exists, overwrite the header fallback.
+                record.timestamp = std::stoll(value);
+            }
+            catch (...) {
+                // Ignore conversion errors; the fallback timestamp remains intact.
+            }
         }
         else if (key == "PRIORITY") {
-            // Try converting value to int; if fail, default to 0.
             try { record.priority = std::stoi(value); }
             catch (...) { record.priority = 0; }
         }
         else if (key == "_PID") {
-            // Try converting value to int; if fail, default to 0.
             try { record.pid = std::stoi(value); }
             catch (...) { record.pid = 0; }
         }
-        // Handle Source Identifier (fallback to _COMM if SYSLOG_IDENTIFIER is missing).
         else if (key == "SYSLOG_IDENTIFIER" || (key == "_COMM" && record.source[0] == '\0')) {
-            // Safe copy to fixed-size char array with truncation protection.
+            // Copy identifier to the source field with truncation safety.
             strncpy_s(record.source, sizeof(record.source), value.c_str(), _TRUNCATE);
         }
         else if (key == "_HOSTNAME") {
-            // Safe copy to host buffer.
+            // Copy hostname to the record.
             strncpy_s(record.host, sizeof(record.host), value.c_str(), _TRUNCATE);
         }
         else if (key == "MESSAGE") {
-            // Safe copy to message buffer.
+            // Copy the main log message content.
             strncpy_s(record.message, sizeof(record.message), value.c_str(), _TRUNCATE);
         }
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: trim
-    // Utility to remove leading and trailing whitespace from strings.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Utility function to remove leading and trailing whitespace from a string.
+     */
     std::string LogParser::trim(const std::string& str) {
-        // Find first non-whitespace character.
         size_t first = str.find_first_not_of(" \t\r\n");
-
-        // If string is all whitespace, return original.
         if (std::string::npos == first) return str;
-
-        // Find last non-whitespace character.
         size_t last = str.find_last_not_of(" \t\r\n");
-
-        // Return the substring containing only the content.
         return str.substr(first, (last - first + 1));
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: parseLogFile (Legacy)
-    // One-shot wrapper to parse an entire file into a single vector.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Static wrapper to parse an entire log file into a single vector.
+     */
     std::vector<LogRecord> LogParser::parseLogFile(const std::string& filename) {
-        // Instantiate a parser.
         LogParser parser(filename);
-
-        // Vectors to hold results.
         std::vector<LogRecord> all_records;
         std::vector<LogRecord> batch;
-
-        // repeatedly call GetNextBatch until it returns false (EOF).
+        // Continuously fetch batches until the file is exhausted.
         while (parser.GetNextBatch(batch, 500000)) {
-            // Append the batch to the main vector.
             all_records.insert(all_records.end(), batch.begin(), batch.end());
         }
-
-        // Return the complete list.
         return all_records;
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Method: SeekToPosition
-    // Jumps the file pointer to a specific byte. Used for Crash Recovery / Resume.
-    // ---------------------------------------------------------------------------------------------------------
+    /**
+     * @brief Jumps the file pointer to a specific offset, clearing buffers and status flags.
+     */
     void LogParser::SeekToPosition(size_t offset) {
-        // Only proceed if file is open.
         if (infile_.is_open()) {
-            // Clear any EOF or error flags before seeking.
-            infile_.clear();
-
-            // Perform the absolute seek from the beginning.
+            infile_.clear(); // Clear EOF and error flags.
             infile_.seekg(offset, std::ios::beg);
-
-            // Reset the internal record buffer since we jumped context.
             resetRecord(current_record_);
-
-            // Mark that we are NOT inside a record currently.
             inside_record_ = false;
-
-            // Update our logical tracker to match the physical position.
             last_record_offset_ = offset;
         }
     }
 
 } // namespace cmse::utils
+
