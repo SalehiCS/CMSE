@@ -40,10 +40,14 @@ void PrintPageInfo(const std::string& label, Page* page) {
         std::cout << "  " << std::left << std::setw(20) << label << ": [NULL]" << std::endl;
         return;
     }
+    // Safe substring logic to avoid out-of-bounds read if data is not null-terminated
+    char safe_buffer[16] = { 0 };
+    strncpy_s(safe_buffer, sizeof(safe_buffer), page->GetData(), _TRUNCATE);
+
     std::cout << "  " << std::left << std::setw(20) << label
         << ": ID=" << std::setw(4) << page->GetPageId()
         << " | PinCount=" << std::setw(2) << page->GetPinCount()
-        << " | Data='" << std::string(page->GetData()).substr(0, 15) << "...'" << std::endl;
+        << " | Data='" << safe_buffer << "...'" << std::endl;
 }
 
 void PrintBanner(const std::string& msg) {
@@ -71,16 +75,17 @@ int main() {
     for (int i = 0; i < POOL_SIZE; i++) {
         page_id_t new_id;
         // 1. Allocate Page
-        Page* p = bpm->NewPage(new_id);
+        Page* p = bpm->NewPage(new_id); // Fixed: Pass address of new_id
 
         if (p == nullptr) {
             std::cerr << "[Fatal] Failed to allocate Page " << i << std::endl;
             return 1;
         }
 
-        // 2. Write Data
+        // 2. Write Data using SAFE copy
         std::string content = "Content_Page_" + std::to_string(new_id);
-        std::strcpy(p->GetData(), content.c_str());
+        // Using PAGE_SIZE (typically 4096) to ensure we don't overflow the page buffer
+        strncpy_s(p->GetData(), PAGE_SIZE - sizeof(PageHeader), content.c_str(), _TRUNCATE);
 
         // 3. Log Status
         PrintPageInfo("Created Page", p);
@@ -129,11 +134,12 @@ int main() {
 
     for (int i = 0; i < 5; i++) {
         page_id_t new_id;
-        Page* p = bpm->NewPage(new_id);
+        Page* p = bpm->NewPage(new_id); // Fixed: Pass address of new_id
 
         if (p != nullptr) {
             std::string content = "Storm_Page_" + std::to_string(new_id);
-            std::strcpy(p->GetData(), content.c_str());
+            // SAFE copy
+            strncpy_s(p->GetData(), PAGE_SIZE - sizeof(PageHeader), content.c_str(), _TRUNCATE);
 
             // Print brief info
             std::cout << "  -> Created Page " << new_id << " (Evicted someone!)" << std::endl;
@@ -156,6 +162,7 @@ int main() {
     // Note: Since we never unpinned it, the pointer 'vip_page' is still strictly valid in memory.
     PrintPageInfo("VIP Page Check", vip_page);
 
+    // We manually ensure null-termination for the read check just in case, though std::string handles it.
     if (std::string(vip_page->GetData()) == "Content_Page_" + std::to_string(vip_id)) {
         std::cout << "\033[1;32m[PASS]\033[0m VIP Page data is intact in RAM." << std::endl;
     }

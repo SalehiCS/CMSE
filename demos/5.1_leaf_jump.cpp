@@ -3,6 +3,7 @@
  * --------------------------------------------------------------------------------------
  * OBJECTIVE: Verify Iterator traversal across leaf boundaries.
  * FIX: Adjusted loop logic to correctly count the final record.
+ * Updated to use safe string copy functions.
  * --------------------------------------------------------------------------------------
  */
 
@@ -47,8 +48,11 @@ int main() {
         LogRecord rec;
         rec.timestamp = i;
         rec.priority = 1;
-        std::strcpy(rec.source, "jump_test");
-        std::strcpy(rec.message, "payload");
+
+        // SAFE COPY: Use strncpy_s with truncation to prevent buffer overflows
+        strncpy_s(rec.source, sizeof(rec.source), "jump_test", _TRUNCATE);
+        strncpy_s(rec.message, sizeof(rec.message), "payload", _TRUNCATE);
+
         btree->Insert(i, rec);
     }
     std::cout << "[Setup] Insertion Complete." << std::endl;
@@ -56,6 +60,7 @@ int main() {
     PrintBanner("PHASE 2: ITERATOR SCAN");
 
     auto it = btree->Begin(0);
+    // Access internal PageGuard via invasive macro trick
     page_id_t current_leaf_id = it.curr_guard_.Get()->GetPageId();
 
     int records_on_page = 0;
