@@ -6,6 +6,7 @@
 #include <chrono>
 #include <limits> 
 #include <algorithm>
+#include <fstream>
 
 #include "../disk/disk_manager.h"
 #include "../bufferpool/buffer_pool_manager.h"
@@ -151,9 +152,9 @@ namespace cmse {
         }
 
         /**
-         * RunQueryInteractive
-         * REPL (Read-Eval-Print Loop) for user querying.
-         */
+                 * RunQueryInteractive
+                 * REPL (Read-Eval-Print Loop) for user querying.
+                 */
         void RunQueryInteractive() {
             std::cout << "\n--- Query Mode ---" << std::endl;
             std::cout << "  help: show supported patterns" << std::endl;
@@ -166,18 +167,14 @@ namespace cmse {
                 if (!std::getline(std::cin, line) || line.empty()) continue;
 
                 if (line == "back") return;
-                if (line == "help") {
-                    PrintQueryHelp();
-                    continue;
-                }
+                if (line == "help") { PrintQueryHelp(); continue; }
 
                 // --- INPUT SANITIZATION & PARSING ---
                 Query q;
                 try {
                     q = ParseQueryString(line);
-                    // Constraint: Queries must filter by at least one dimension
                     if (q.source.empty() && q.host.empty() && q.priority == -1 &&
-                        q.min_timestamp == 0 && q.max_timestamp == INT64_MAX && q.message_contains.empty()) {
+                        q.min_timestamp == 0 && q.max_timestamp == std::numeric_limits<int64_t>::max() && q.message_contains.empty()) {
                         std::cout << "[Error] Invalid or empty query. Please provide at least one filter." << std::endl;
                         continue;
                     }
@@ -196,35 +193,76 @@ namespace cmse {
                 size_t count = 0;
                 const size_t PAGE_SIZE = 20;
                 LogRecord r;
+
                 bool quit_pagination = false;
+                bool print_all = false;     // Mode 'a': Print everything to screen
+                bool save_to_file = false;  // Mode 's': Save everything to file
+                std::ofstream out_file;     // Handle for the file output
 
                 // While Next() returns true, we have data
                 while (cursor->Next(r)) {
-                    // Print Record
-                    std::cout << r.toString() << " | SRC:" << r.source
-                        << " | HOST:" << r.host << " | PRI:" << r.priority << std::endl;
+
+                    // Format the output string once
+                    std::string output_line = r.toString() + " | SRC:" + r.source +
+                        " | HOST:" + r.host + " | PRI:" + std::to_string(r.priority);
+
+                    // DECISION: Where does the output go?
+                    if (save_to_file) {
+                        out_file << output_line << "\n";
+                    }
+                    else {
+                        std::cout << output_line << std::endl;
+                    }
 
                     count++;
 
-                    // Pagination Logic
-                    if (count % PAGE_SIZE == 0) {
-                        std::cout << "-- Press Enter for next 20, 'q' to stop --";
+                    // PAGINATION LOGIC
+                    // We only pause if we are NOT in 'print all' mode AND NOT in 'save to file' mode
+                    if (!print_all && !save_to_file && count % PAGE_SIZE == 0) {
+                        std::cout << "-- Press Enter for next 20, 'a' for all, 's' to save to file, 'q' to stop --";
                         char c = std::cin.get();
-                        // If user pressed 'q'
+
+                        // 1. Quit
                         if (c == 'q') {
-                            // Eat newline if present
                             if (std::cin.peek() == '\n') std::cin.ignore();
                             quit_pagination = true;
                             break;
                         }
-                        // If user just pressed Enter, we might still need to eat the newline
-                        if (c != '\n' && std::cin.peek() == '\n') {
+                        // 2. Show All (Disable pagination)
+                        else if (c == 'a') {
+                            print_all = true;
+                            if (std::cin.peek() == '\n') std::cin.ignore();
+                        }
+                        // 3. Save to File (Redirect output)
+                        else if (c == 's') {
+                            // Consume the newline from the command input
+                            if (std::cin.peek() == '\n') std::cin.ignore();
+
+                            std::cout << "Enter filename (e.g. export.txt): ";
+                            std::string fname;
+                            std::getline(std::cin, fname);
+
+                            out_file.open(fname);
+                            if (out_file.is_open()) {
+                                save_to_file = true;
+                                std::cout << "[System] Exporting remaining records to '" << fname << "'..." << std::endl;
+                            }
+                            else {
+                                std::cout << "[Error] Could not open file '" << fname << "'. Continuing to screen..." << std::endl;
+                            }
+                        }
+                        // 4. Next Page (Enter)
+                        else if (c != '\n' && std::cin.peek() == '\n') {
                             std::cin.ignore();
                         }
                     }
                 }
 
-                if (!quit_pagination) {
+                if (save_to_file) {
+                    std::cout << "[Success] Export Complete. Total records processed: " << count << std::endl;
+                    out_file.close();
+                }
+                else if (!quit_pagination) {
                     std::cout << "[Finished] Total displayed: " << count << std::endl;
                 }
                 else {

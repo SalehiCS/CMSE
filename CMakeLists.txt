@@ -55,3 +55,5 @@ target_link_libraries(cmse_app PRIVATE cmse_core)
 
 
 
+add_executable(1.2_btree_internal_split demos/1.2_btree_internal_split.cpp)
+target_link_libraries(1.2_btree_internal_split PRIVATE cmse_core)
