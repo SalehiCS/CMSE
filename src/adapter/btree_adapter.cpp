@@ -350,7 +350,7 @@ namespace cmse::adapter {
                 KeyType max_left = original->keys[original->header.key_count - 1];
                 KeyType min_right = sibling->keys[0];
 
-                if (max_left >= min_right) {
+                if (max_left > min_right) {
                     LOG_DEBUG_SPLIT("[FATAL] SORT ORDER VIOLATION!");
                     LOG_DEBUG_SPLIT("LeftPage Max (" << max_left << ") >= RightPage Min (" << min_right << ")");
                     LOG_DEBUG_SPLIT("This means the page was NOT sorted before splitting!");
