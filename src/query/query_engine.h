@@ -1,28 +1,14 @@
 #pragma once
+
 #include <vector>
 #include <string>
-#include <algorithm>
-#include "../index/btree_index.h"
+#include <memory>
 #include "../index/trie_index.h"
+#include "../index/btree_index.h"
 #include "../common/types.h"
-#include "query_cursor.h"
+#include "query_cursor.h" 
 
 namespace cmse {
-
-    /**
-     * Query
-     * A structured representation of the user's search intent.
-     * Supports range-based temporal filters, categorical filters, and prefix wildcards.
-     */
-    struct Query {
-        int64_t min_timestamp = 0;              // Start of time range
-        int64_t max_timestamp = INT64_MAX;      // End of time range
-        int32_t priority = -1;                  // Syslog priority filter (-1 for wildcard)
-
-        std::string source;           // Originating service (supports '*' prefix)
-        std::string host;             // Originating machine (supports '*' prefix)
-        std::string message_contains; // Keyword search within the log payload
-    };
 
     class QueryEngine {
     public:

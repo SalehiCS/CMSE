@@ -61,7 +61,7 @@ namespace cmse {
             }
 
             // 5. Intelligence Layer: Plan executor for user searches
-            query_engine_ = std::make_unique<QueryEngine>(btree_.get(), trie_.get());
+            query_engine_ = std::make_unique<QueryEngine>(trie_.get(), btree_.get());
         }
 
         /**

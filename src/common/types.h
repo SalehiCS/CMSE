@@ -3,6 +3,7 @@
 #include <string>
 #include <chrono>
 #include <limits> 
+#include <cstring> // Required for strncpy_s
 
 /**
  * CMSE (Centralized Management System Engine) Namespace
@@ -88,5 +89,32 @@ namespace cmse {
      * Since this is a clustered index, the ValueType is equivalent to the full LogRecord.
      */
     using ValueType = LogRecord;
+
+
+    // --- QUERY STRUCTURE (Logical Filter) ---
+
+    /**
+     * Query: Represents a set of filters applied to the log database.
+     * Used to pass search criteria from the CLI to the Execution Engine.
+     */
+    struct Query {
+        // Range Filter: Start time (Default: 0 / Beginning of time)
+        int64_t min_timestamp = 0;
+
+        // Range Filter: End time (Default: Max Int / End of time)
+        int64_t max_timestamp = std::numeric_limits<int64_t>::max();
+
+        // Equality Filter: Log Priority (-1 indicates "Any Priority")
+        int32_t priority = -1;
+
+        // String Filter: Source/Service Name (Supports '*' suffix for prefix matching)
+        std::string source;
+
+        // String Filter: Hostname (Supports '*' suffix for prefix matching)
+        std::string host;
+
+        // Substring Filter: Message body must contain this string
+        std::string message_contains;
+    };
 
 } // namespace cmse
