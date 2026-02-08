@@ -102,7 +102,8 @@ namespace cmse::adapter {
         int getMaxKeys(Page* page);
 
         // Search and optimization logic.
-        page_id_t findChild(Page* internal_page, const KeyType& key);
+        // [UPDATED] Added 'for_write' to handle duplicate key routing
+        page_id_t findChild(Page* internal_page, const KeyType& key, bool for_write);
         bool shouldSkip(Page* page, const KeyType& query_min, const KeyType& query_max);
 
         // Modification and structural logic.

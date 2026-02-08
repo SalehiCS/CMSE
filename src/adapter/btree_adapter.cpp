@@ -41,7 +41,7 @@ namespace cmse::adapter {
      */
     int BTreeAdapter::getMaxKeys(Page* page) {
         if (isLeaf(page)) {
-            return MAX_KEYS_LEAF;     // Limit for data-heavy nodes
+            return MAX_KEYS_LEAF;      // Limit for data-heavy nodes
         }
         else {
             return MAX_KEYS_INTERNAL; // Limit for pointer-heavy nodes
@@ -120,20 +120,36 @@ namespace cmse::adapter {
     /**
      * findChild
      * PURPOSE: Determines which child page to descend into during a search.
-     * LOGIC: Uses binary search (std::upper_bound) to find the first key > search key.
-     * WHY: In a B+ Tree, keys[i] separates children[i] and children[i+1].
+     * LOGIC: Handles duplicate keys by choosing direction based on operation type.
+     * @param for_write If true (Insert), goes RIGHT of duplicates. If false (Search), goes LEFT.
      */
-    page_id_t BTreeAdapter::findChild(Page* page, const KeyType& key) {
+    page_id_t BTreeAdapter::findChild(Page* page, const KeyType& key, bool for_write) {
         BPlusInternalNode* internal = getInternalNode(page);
         int count = internal->header.key_count;
 
         auto* keys_begin = internal->keys;
         auto* keys_end = internal->keys + count;
 
-        auto it = std::upper_bound(keys_begin, keys_end, key);
-        int index = static_cast<int>(std::distance(keys_begin, it));
+        int index;
 
-        return internal->children[index]; // Return pointer to the correct branch
+        if (for_write) {
+            // INSERT MODE: We want to append to the end of duplicates.
+            // Use upper_bound: Finds first element STRICTLY GREATER than key.
+            // E.g., Keys=[10, 10, 20], Key=10. upper_bound -> 20 (Index 2).
+            // We follow child[2], which covers range >= 10.
+            auto it = std::upper_bound(keys_begin, keys_end, key);
+            index = static_cast<int>(std::distance(keys_begin, it));
+        }
+        else {
+            // READ MODE: We want the first occurrence of duplicates.
+            // Use lower_bound: Finds first element GREATER OR EQUAL to key.
+            // E.g., Keys=[10, 10, 20], Key=10. lower_bound -> 10 (Index 0).
+            // We follow child[0], which covers range < 10 (or = 10 depending on left-split policy).
+            auto it = std::lower_bound(keys_begin, keys_end, key);
+            index = static_cast<int>(std::distance(keys_begin, it));
+        }
+
+        return internal->children[index];
     }
 
     /**
@@ -145,8 +161,6 @@ namespace cmse::adapter {
     bool BTreeAdapter::shouldSkip(Page* page, const KeyType& query_min, const KeyType& query_max) {
         BPlusNodeHeader* header = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
 
-        // It is safer to visit an empty page and find nothing than
-        // to skip a page that might have been the starting point for new insertions.
         // Guarding Against Uninitialized Metadata
         if (header->key_count == 0) return false;
 
@@ -177,6 +191,8 @@ namespace cmse::adapter {
         int count = leaf->header.key_count;
         auto* keys_begin = leaf->keys;
         auto* keys_end = leaf->keys + count;
+
+        // Find sorted position
         auto it = std::upper_bound(keys_begin, keys_end, key);
         int index = static_cast<int>(std::distance(keys_begin, it));
 
@@ -218,9 +234,6 @@ namespace cmse::adapter {
             }
         }
 
-        // Parent may be not found because of:
-        // Concurrency issues (race conditions in multi-threaded environment)
-        // Cascading CoW updates (parent itself was shadowed)
         if (!found) {
             std::cerr << "[BTreeAdapter] Error: Parent pointer update failed. Child "
                 << old_child_id << " not found." << std::endl;
@@ -268,9 +281,8 @@ namespace cmse::adapter {
     // Structure Management (Splits)
     // -------------------------------------------------------------------------
 
-
-// =========================================================================
-    // PARANOID SPLIT NODE (With Corruption Detection)
+    // =========================================================================
+    // PARANOID SPLIT NODE (With Corruption Detection & Duplicate Support)
     // =========================================================================
     void BTreeAdapter::splitNode(Page* node_to_split, Page* new_right_page, SplitResult* out_result) {
 
@@ -319,7 +331,7 @@ namespace cmse::adapter {
             sibling->header.key_count = sibling_count;
 
             // ---------------------------------------------------------
-            // 3. LINKING (The Danger Zone)
+            // 3. LINKING
             // ---------------------------------------------------------
             page_id_t old_next = original->next_leaf_id;
 
@@ -334,7 +346,7 @@ namespace cmse::adapter {
             updateStatistics(new_right_page);
 
             // ---------------------------------------------------------
-            // 4. POST-SPLIT CORRUPTION CHECK (The Trap)
+            // 4. POST-SPLIT CORRUPTION CHECK
             // ---------------------------------------------------------
 
             // CHECK A: Did we create a generic loop?
@@ -345,14 +357,15 @@ namespace cmse::adapter {
                 LOG_DEBUG_SPLIT("[FATAL] CORRUPTION: Sibling " << sib_id << " points to ITSELF.");
             }
 
-            // CHECK B: Are keys strictly increasing across the split?
+            // CHECK B: Are keys increasing? (Relaxed check for duplicates)
             if (original->header.key_count > 0 && sibling->header.key_count > 0) {
                 KeyType max_left = original->keys[original->header.key_count - 1];
                 KeyType min_right = sibling->keys[0];
 
+                // FIX: Used strictly Greater Than. 'MaxLeft == MinRight' is allowed for duplicates.
                 if (max_left > min_right) {
                     LOG_DEBUG_SPLIT("[FATAL] SORT ORDER VIOLATION!");
-                    LOG_DEBUG_SPLIT("LeftPage Max (" << max_left << ") >= RightPage Min (" << min_right << ")");
+                    LOG_DEBUG_SPLIT("LeftPage Max (" << max_left << ") > RightPage Min (" << min_right << ")");
                     LOG_DEBUG_SPLIT("This means the page was NOT sorted before splitting!");
                 }
             }
@@ -360,9 +373,7 @@ namespace cmse::adapter {
             LOG_DEBUG_SPLIT("[Adapter] Leaf Split Done. Chain: " << orig_id << " -> " << sib_id << " -> " << old_next);
         }
         else {
-            // ... (Internal Node Split Logic - Assuming this is standard) ...
-            // [Keep your existing Internal Node logic here]
-
+            // Internal Node Split Logic
             BPlusInternalNode* original = getInternalNode(node_to_split);
             BPlusInternalNode* sibling = getInternalNode(new_right_page);
             initInternal(new_right_page);
@@ -390,11 +401,10 @@ namespace cmse::adapter {
         syncPageHeader(node_to_split);
         syncPageHeader(new_right_page);
     }
+
     /**
      * createNewRoot
      * PURPOSE: Creates a new level at the top of the tree after a root split.
-     * WHY: This is how the B+ Tree grows in height. The new root will have
-     * exactly 1 key and 2 children (the split halves of the old root).
      */
     void BTreeAdapter::createNewRoot(Page* new_root_page, page_id_t left_child, page_id_t right_child, const KeyType& key) {
         initInternal(new_root_page);
@@ -415,9 +425,6 @@ namespace cmse::adapter {
     /**
      * updateStatistics
      * PURPOSE: Updates Min/Max/Density/Total metadata used for query optimization.
-     * LOGIC: Leaf nodes are updated exactly; Internal nodes are updated incrementally.
-     * WHY: We avoid deep tree traversals for every insert. Internal nodes trust
-     * the total_keys provided by their children during recursive updates.
      */
     void BTreeAdapter::updateStatistics(cmse::Page* page) {
         auto* header = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
@@ -432,7 +439,6 @@ namespace cmse::adapter {
         }
 
         if (header->is_leaf) {
-            // Leaf Nodes have the raw data, so we can set exact boundaries.
             auto* leaf = reinterpret_cast<BPlusLeafNode*>(page->GetData());
             header->min_key = leaf->keys[0];
             header->max_key = leaf->keys[count - 1];
@@ -444,8 +450,6 @@ namespace cmse::adapter {
             }
         }
         else {
-            // Internal nodes trust their min/max/total range.
-            // We only recalculate density here to reflect the latest total_keys.
             if (header->max_key >= header->min_key) {
                 double range = (double)(header->max_key - header->min_key) + 1.0;
                 if (range > 0) {
@@ -454,16 +458,12 @@ namespace cmse::adapter {
             }
         }
 
-        // After stats update, we treat the node as "Validated" and clear the dirty-bit logic marker.
-        // Physically Dirty : The keys or pointers changed(handled by the Buffer Pool).
-        // Logically Dirty : The statistics(min_key, max_key, total_keys) are no longer accurate because of an insertion or split.
         header->is_dirty = 0;
     }
 
     /**
      * setDirty
      * PURPOSE: Explicitly marks a page as modified.
-     * WHY: This ensures the BufferPoolManager knows this page MUST be written to disk.
      */
     void BTreeAdapter::setDirty(Page* page) {
         if (page == nullptr) return;

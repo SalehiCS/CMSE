@@ -269,53 +269,25 @@ namespace cmse::index
 
         // Step 2: Iterate down through Internal Nodes until we land on a Leaf Node.
         while (!adapter_.isLeaf(curr_guard.Get())) {
-
-            if (key == 9999 || key == -1) {
-                auto* h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(curr_guard.Get()->GetData());
-                std::cout << "[FindLeaf " << key << "] At Page " << curr_guard.Get()->GetPageId()
-                    << " (Count: " << h->key_count << ", MaxKey: " << h->max_key << ")" << std::endl;
-            }
-
             if (for_write) {
-                // WRITE MODE: We use "Pessimistic Locking" logic.
-                // We move the guard into the stack (ctx). This keeps the page pinned in memory
-                // because if the child splits, we need the parent already in RAM to modify it.
                 Page* raw_ptr = curr_guard.Get();
                 ctx.path_pages.push_back(std::move(curr_guard));
 
-                // Find which child pointer to follow based on the key.
-                page_id_t next_id = adapter_.findChild(raw_ptr, key);
+                // PASS 'true' for write mode
+                page_id_t next_id = adapter_.findChild(raw_ptr, key, true);
 
-                if (key == 9999 || key == -1) {
-                    std::cout << "   -> Chose Child: " << next_id << std::endl;
-                }
-
-                // Fetch the child page into the now-empty curr_guard.
                 curr_guard = PageGuard(bpm_, bpm_->FetchPage(next_id));
             }
             else {
-                // READ MODE: "Crab Walking" optimization.
-                // We find the child ID, then drop the parent pin BEFORE fetching the child.
-                // This maximizes Buffer Pool availability for other threads.
-                page_id_t next_id = adapter_.findChild(curr_guard.Get(), key);
+                // PASS 'false' for read mode
+                page_id_t next_id = adapter_.findChild(curr_guard.Get(), key, false);
 
-                if (key == 9999 || key == -1) {
-                    std::cout << "   -> Chose Child: " << next_id << std::endl;
-                }
-
-                curr_guard.Drop(); // Release parent pin.
+                curr_guard.Drop();
                 curr_guard = PageGuard(bpm_, bpm_->FetchPage(next_id));
             }
-
-            // Safety check for broken links or failed fetches.
             if (!curr_guard.IsValid()) return {};
         }
-
-        if (key == 9999 || key == -1) {
-            std::cout << "[FindLeaf " << key << "] Landed on Leaf: " << curr_guard.Get()->GetPageId() << std::endl;
-        }
-
-        return curr_guard; // Returns the leaf guard (caller now owns the pin).
+        return curr_guard;
     }
 
     /**
