@@ -21,14 +21,44 @@ void PrintHelp() {
  * Application entry point. Handles boot-time arguments and the primary REPL loop.
  */
 int main(int argc, char* argv[]) {
-    // 1. ARGUMENT PARSING: Check for global flags like -g (debug mode)
+    // 1. ARGUMENT PARSING
+    bool debug_mode = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-g") {
-            // Enable the internal tracing logger; output is directed to debug.log
-            Logger::GetInstance().SetEnabled(true);
-            std::cout << "[DEBUG] Logging Enabled (debug.log)" << std::endl;
+            debug_mode = true;
         }
+    }
+
+    // 2. DEBUG CONFIGURATION (Interactive)
+    if (debug_mode) {
+        Logger::PrintDebugMenu();
+
+        int choice;
+        if (std::cin >> choice) {
+            int mask = 0;
+            switch (choice) {
+            case 1: mask = LOG_ENGINE; break;
+            case 2: mask = LOG_SPLIT; break;
+            case 3: mask = LOG_BUFFER; break;
+            case 4: mask = LOG_QUERY; break;
+            case 9: mask = LOG_ALL; break;
+            case 0: mask = LOG_NONE; break;
+            default:
+                std::cout << "[Warn] Invalid choice. Defaulting to ALL.\n";
+                mask = LOG_ALL;
+                break;
+            }
+            Logger::GetInstance().SetEnabledChannels(mask);
+            std::cout << "[DEBUG] Logging Enabled (Channel Mask: " << mask << ")\n" << std::endl;
+        }
+        else {
+            std::cout << "[Error] Invalid input. Logging Disabled.\n";
+        }
+
+        // Clear input buffer so it doesn't mess up the main engine loop
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     }
 
     // --- VISUAL HEADER ---

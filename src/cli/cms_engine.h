@@ -129,7 +129,7 @@ namespace cmse {
                     txn = vm_->BeginTransaction();
                     txn.pending_trie_root_id = trie_->GetRootId(); // Maintain state link
 
-                    LOG_DEBUG("[Engine] New Txn Started. Inherited TrieRoot=" << txn.pending_trie_root_id);
+                    
 
                     records_since_commit = 0;
                     std::cout << "Done." << std::endl;

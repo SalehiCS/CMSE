@@ -7,91 +7,131 @@
 #include <iomanip>
 #include <ctime>
 
+// --- STEP 1: DEFINE LOG CHANNELS ---
+// Using powers of 2 for bitmasking allows combining multiple channels if needed.
+enum LogChannel {
+    LOG_NONE = 0,
+    LOG_ENGINE = 1 << 0, // 1
+    LOG_SPLIT = 1 << 1, // 2
+    LOG_BUFFER = 1 << 2, // 4
+    LOG_QUERY = 1 << 3, // 8
+    LOG_ALL = 0xFFFF  // Enable everything
+};
+
 /**
- * Logger: A thread-safe Singleton utility for system-wide diagnostic logging.
- * Implements a "Lazy Singleton" pattern (Meyers Singleton) to manage a centralized debug file.
+ * Logger: Thread-safe Singleton with Channel-based filtering.
  */
 class Logger {
 public:
-    /**
-     * Accesses the global Logger instance.
-     * Guaranteed to be thread-safe in C++11 and later for static initialization.
-     * @return Reference to the persistent Logger instance.
-     */
     static Logger& GetInstance() {
-        static Logger instance; // Initialized on first use
+        static Logger instance;
         return instance;
     }
 
     /**
-     * Toggles the logging state and initializes the output stream.
-     * @param enable If true, opens/truncates "debug.log" for writing.
+     * SetEnabledChannels
+     * Sets the active logging filter. Only logs matching this mask will be written.
+     * @param mask Bitmask of active channels (e.g., LOG_ENGINE | LOG_SPLIT).
      */
-    void SetEnabled(bool enable) {
-        std::lock_guard<std::mutex> lock(mutex_); // Ensure exclusive access during state change
-        enabled_ = enable;                        // Update control flag
-        if (enabled_ && !log_file_.is_open()) {
-            // Open file in truncate mode to prevent massive log growth across sessions
+    void SetEnabledChannels(int mask) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        active_channels_ = mask;
+
+        if (active_channels_ != LOG_NONE && !log_file_.is_open()) {
             log_file_.open("debug.log", std::ios::out | std::ios::trunc);
         }
     }
 
     /**
-     * Checks if the logger is currently active.
-     * Designed for high-frequency checks within macros to avoid unnecessary overhead.
-     * @return The current state of the enabled_ flag.
+     * IsChannelEnabled
+     * Fast check to see if a specific channel is active before building strings.
      */
-    bool IsEnabled() {
-        // Read lock is omitted for performance; assumes atomic read for the boolean flag
-        return enabled_;
+    bool IsChannelEnabled(LogChannel channel) const {
+        return (active_channels_ & channel) != 0;
     }
 
     /**
-     * Writes a timestamped message to the log file.
-     * Thread-safety is guaranteed via internal mutex locking.
-     * @param message The pre-formatted string to write.
+     * Log
+     * Writes message only if the channel is enabled.
      */
     void Log(const std::string& message) {
-        std::lock_guard<std::mutex> lock(mutex_); // Prevent interleaved writes from multiple threads
-        if (enabled_ && log_file_.is_open()) {
-            std::time_t t = std::time(nullptr);   // Fetch current system time
-            std::tm tm_buf;                       // Buffer to hold broken-down time
-
-            // Platform-specific thread-safe time conversion
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (log_file_.is_open()) {
+            std::time_t t = std::time(nullptr);
+            std::tm tm_buf;
 #ifdef _WIN32
-            localtime_s(&tm_buf, &t);             // Windows-safe variant
+            localtime_s(&tm_buf, &t);
 #else
-            localtime_r(&t, &tm_buf);             // POSIX-safe variant
+            localtime_r(&t, &tm_buf);
 #endif
-            // Stream output with timestamping: [HH:MM:SS] Message
             log_file_ << "[" << std::put_time(&tm_buf, "%H:%M:%S") << "] " << message << std::endl;
         }
     }
 
-private:
-    /** Private constructor to enforce Singleton pattern; defaults to disabled state. */
-    Logger() : enabled_(false) {}
+    /**
+     * Helper to print the menu options to CLI.
+     */
+    static void PrintDebugMenu() {
+        std::cout << "\n[DEBUG MODE DETECTED] Select Log Channel:\n";
+        std::cout << "1 - Engine Core (Txn, Startup)\n";
+        std::cout << "2 - B-Tree Splits (Structure Changes)\n";
+        std::cout << "3 - Buffer Pool (LRU, Pins)\n";
+        std::cout << "4 - Query Execution (Cursor, Search)\n";
+        std::cout << "9 - ALL LOGS\n";
+        std::cout << "0 - Disable Logging\n";
+        std::cout << "Choice > ";
+    }
 
-    /** Ensures the file handle is released properly upon system shutdown. */
+private:
+    Logger() : active_channels_(LOG_NONE) {}
+
     ~Logger() {
         if (log_file_.is_open()) log_file_.close();
     }
 
-    std::ofstream log_file_; // The output stream to "debug.log"
-    std::mutex mutex_;       // Synchronizes access to log_file_ across threads
-    bool enabled_;           // Master toggle for logging activity
+    std::ofstream log_file_;
+    std::mutex mutex_;
+    int active_channels_; // Stores the bitmask of enabled logs
 };
 
-/**
- * LOG_DEBUG Macro
- * Performance Optimization: Checks IsEnabled() BEFORE performing expensive
- * stringstream formatting and memory allocations.
- * * Usage: LOG_DEBUG("Variable x is: " << x);
- */
+// --- STEP 2: DEFINE TYPE-SPECIFIC MACROS ---
+
+// General Debug (Legacy support, maps to ALL)
 #define LOG_DEBUG(msg) { \
-    if (Logger::GetInstance().IsEnabled()) { \
-        std::stringstream ss; \
-        ss << msg; \
+    if (Logger::GetInstance().IsChannelEnabled(LOG_ALL)) { \
+        std::stringstream ss; ss << "[General] " << msg; \
+        Logger::GetInstance().Log(ss.str()); \
+    } \
+}
+
+// Channel: ENGINE
+#define LOG_DEBUG_ENGINE(msg) { \
+    if (Logger::GetInstance().IsChannelEnabled(LOG_ENGINE)) { \
+        std::stringstream ss; ss << "[Engine] " << msg; \
+        Logger::GetInstance().Log(ss.str()); \
+    } \
+}
+
+// Channel: SPLIT
+#define LOG_DEBUG_SPLIT(msg) { \
+    if (Logger::GetInstance().IsChannelEnabled(LOG_SPLIT)) { \
+        std::stringstream ss; ss << "[Split ] " << msg; \
+        Logger::GetInstance().Log(ss.str()); \
+    } \
+}
+
+// Channel: BUFFER
+#define LOG_DEBUG_BUFFER(msg) { \
+    if (Logger::GetInstance().IsChannelEnabled(LOG_BUFFER)) { \
+        std::stringstream ss; ss << "[Buffer] " << msg; \
+        Logger::GetInstance().Log(ss.str()); \
+    } \
+}
+
+// Channel: QUERY
+#define LOG_DEBUG_QUERY(msg) { \
+    if (Logger::GetInstance().IsChannelEnabled(LOG_QUERY)) { \
+        std::stringstream ss; ss << "[Query ] " << msg; \
         Logger::GetInstance().Log(ss.str()); \
     } \
 }
