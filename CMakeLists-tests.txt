@@ -140,3 +140,33 @@ add_test(NAME VersionStressTest COMMAND version_stress_test)
 add_executable(query_test tests/query_test.cpp)
 target_link_libraries(query_test PRIVATE cmse_core)
 add_test(NAME QueryTest COMMAND query_test)
+
+
+
+
+add_executable(1.1_btree_split demos/1.1_btree_split.cpp)
+target_link_libraries(1.1_btree_split PRIVATE cmse_core)
+
+add_executable(1.2_btree_internal_split demos/1.2_btree_internal_split.cpp)
+target_link_libraries(1.2_btree_internal_split PRIVATE cmse_core)
+
+add_executable(1.3_btree_stats demos/1.3_btree_stats.cpp)
+target_link_libraries(1.3_btree_stats PRIVATE cmse_core)
+
+add_executable(2.1_trie_split demos/2.1_trie_split.cpp)
+target_link_libraries(2.1_trie_split PRIVATE cmse_core)
+
+add_executable(2.2_trie_cap_safety demos/2.2_trie_cap_safety.cpp)
+target_link_libraries(2.2_trie_cap_safety PRIVATE cmse_core)
+
+add_executable(3.1_mvcc_shadow_paging demos/3.1_mvcc_shadow_paging.cpp)
+target_link_libraries(3.1_mvcc_shadow_paging PRIVATE cmse_core)
+
+add_executable(3.2_crash_recovery demos/3.2_crash_recovery.cpp)
+target_link_libraries(3.2_crash_recovery PRIVATE cmse_core)
+
+add_executable(4.1_eviction_test demos/4.1_eviction_test.cpp)
+target_link_libraries(4.1_eviction_test PRIVATE cmse_core)
+
+add_executable(5.1_leaf_jump demos/5.1_leaf_jump.cpp)
+target_link_libraries(5.1_leaf_jump PRIVATE cmse_core)

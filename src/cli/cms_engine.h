@@ -189,15 +189,16 @@ namespace cmse {
 
                 std::cout << "Executing..." << std::endl;
 
-                // 1. Get the Cursor (Instant)
+                // 1. Get the Cursor (Instant return)
                 auto cursor = query_engine_->Execute(q);
 
                 // 2. Iterate Lazily
                 size_t count = 0;
                 const size_t PAGE_SIZE = 20;
                 LogRecord r;
+                bool quit_pagination = false;
 
-                // Fetch first record
+                // While Next() returns true, we have data
                 while (cursor->Next(r)) {
                     // Print Record
                     std::cout << r.toString() << " | SRC:" << r.source
@@ -209,15 +210,26 @@ namespace cmse {
                     if (count % PAGE_SIZE == 0) {
                         std::cout << "-- Press Enter for next 20, 'q' to stop --";
                         char c = std::cin.get();
+                        // If user pressed 'q'
                         if (c == 'q') {
-                            // Clear buffer and stop
-                            if (std::cin.peek() != '\n') std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                            // Eat newline if present
+                            if (std::cin.peek() == '\n') std::cin.ignore();
+                            quit_pagination = true;
                             break;
+                        }
+                        // If user just pressed Enter, we might still need to eat the newline
+                        if (c != '\n' && std::cin.peek() == '\n') {
+                            std::cin.ignore();
                         }
                     }
                 }
 
-                std::cout << "[Finished] Total displayed: " << count << std::endl;
+                if (!quit_pagination) {
+                    std::cout << "[Finished] Total displayed: " << count << std::endl;
+                }
+                else {
+                    std::cout << "[Stopped] Displayed: " << count << std::endl;
+                }
             }
         }
 

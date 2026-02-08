@@ -3,9 +3,11 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <cstring>
 #include <algorithm>
 
-#include "../common/types.h"
+// Adjust includes based on your directory structure
+#include "../common/types.h"       // Defines 'Query' struct
 #include "../index/btree_index.h"
 #include "../index/btree_iterator.h"
 
@@ -23,20 +25,22 @@ namespace cmse {
         enum class Mode { SEQUENTIAL_SCAN, SPARSE_LOOKUP };
 
         // --- CONSTRUCTOR FOR PLAN A (SPARSE / INDEX SCAN) ---
-        QueryCursor(index::BTreeIndex* btree, std::vector<int64_t> candidates, Query q)
+        // Matches: make_unique<QueryCursor>(btree_, std::move(candidates), q)
+        QueryCursor(index::BTreeIndex* btree, std::vector<int64_t> candidates, const Query& q)
             : mode_(Mode::SPARSE_LOOKUP),
             btree_(btree),
             candidates_(std::move(candidates)),
-            query_(std::move(q)),
+            query_(q),
             current_idx_(0) {
         }
 
         // --- CONSTRUCTOR FOR PLAN B (SEQUENTIAL / RANGE SCAN) ---
-        // Takes ownership of the BTreeIterator
-        QueryCursor(index::BTreeIterator&& iter, Query q)
+        // Matches: make_unique<QueryCursor>(std::move(it), q)
+        QueryCursor(index::BTreeIterator&& iter, const Query& q)
             : mode_(Mode::SEQUENTIAL_SCAN),
+            // We move the iterator into a unique_ptr to manage its lifecycle
             iter_ptr_(std::make_unique<index::BTreeIterator>(std::move(iter))),
-            query_(std::move(q)),
+            query_(q),
             btree_(nullptr),
             current_idx_(0) {
         }
@@ -67,7 +71,6 @@ namespace cmse {
         size_t current_idx_;
 
         // --- STATE FOR SEQUENTIAL SCAN ---
-        // Wrapped in unique_ptr because BTreeIterator might not be default-constructible
         std::unique_ptr<index::BTreeIterator> iter_ptr_;
 
         // --- FILTERING LOGIC ---

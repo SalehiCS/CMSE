@@ -24,13 +24,6 @@ namespace cmse {
         std::string message_contains; // Keyword search within the log payload
     };
 
-    /**
-     * QueryEngine
-     * The decision-making heart of the system. It implements Hybrid Search:
-     * 1. Cost Estimation: Asks the Trie how many records match the filters.
-     * 2. Plan Selection: If results are sparse (< 100), use point lookups.
-     * 3. Plan Selection: If results are dense, use a sequential B+Tree scan.
-     */
     class QueryEngine {
     public:
         QueryEngine(index::TrieIndex* trie, index::BTreeIndex* btree)
@@ -92,6 +85,8 @@ namespace cmse {
                 // [PLAN B] Return Sequential Cursor
                 // Initialize BTreeIterator at start of range
                 auto it = btree_->Begin(q.min_timestamp);
+
+                // IMPORTANT: std::move(it) to transfer ownership to the Cursor
                 return std::make_unique<QueryCursor>(std::move(it), q);
             }
         }
