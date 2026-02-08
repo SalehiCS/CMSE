@@ -11,7 +11,7 @@
 // Using powers of 2 for bitmasking allows combining multiple channels if needed.
 enum LogChannel {
     LOG_NONE = 0,
-    LOG_ENGINE = 1 << 0, // 1
+    LOG_LRU = 1 << 0, // 1
     LOG_SPLIT = 1 << 1, // 2
     LOG_BUFFER = 1 << 2, // 4
     LOG_QUERY = 1 << 3, // 8
@@ -31,7 +31,7 @@ public:
     /**
      * SetEnabledChannels
      * Sets the active logging filter. Only logs matching this mask will be written.
-     * @param mask Bitmask of active channels (e.g., LOG_ENGINE | LOG_SPLIT).
+     * @param mask Bitmask of active channels (e.g., LRU | LOG_SPLIT).
      */
     void SetEnabledChannels(int mask) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -73,7 +73,7 @@ public:
      */
     static void PrintDebugMenu() {
         std::cout << "\n[DEBUG MODE DETECTED] Select Log Channel:\n";
-        std::cout << "1 - Engine Core (Txn, Startup)\n";
+        std::cout << "1 - LRU (Pinn)\n";
         std::cout << "2 - B-Tree Splits (Structure Changes)\n";
         std::cout << "3 - Buffer Pool (LRU, Pins)\n";
         std::cout << "4 - Query Execution (Cursor, Search)\n";
@@ -104,10 +104,10 @@ private:
     } \
 }
 
-// Channel: ENGINE
-#define LOG_DEBUG_ENGINE(msg) { \
-    if (Logger::GetInstance().IsChannelEnabled(LOG_ENGINE)) { \
-        std::stringstream ss; ss << "[Engine] " << msg; \
+// Channel: LRU
+#define LOG_DEBUG_LRU(msg) { \
+    if (Logger::GetInstance().IsChannelEnabled(LOG_LRU)) { \
+        std::stringstream ss; ss << "[LRU] " << msg; \
         Logger::GetInstance().Log(ss.str()); \
     } \
 }

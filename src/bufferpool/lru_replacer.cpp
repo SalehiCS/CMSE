@@ -62,7 +62,8 @@ namespace cmse {
             std::lock_guard<std::mutex> lock(mutex_);
 
             // [LOG] Pinning implies the page is now in active use.
-            LOG_DEBUG("[LRU] Pin Frame " << frame_id);
+            LOG_DEBUG_LRU("Pin Frame: frame_id" << frame_id);
+
 
             // If the frame is in the replacer (map), it was a potential candidate for eviction.
             // Since a thread has requested it, we remove it from the eviction "death row".
@@ -90,7 +91,7 @@ namespace cmse {
             }
 
             // [LOG] Unpinning implies the page is now a candidate for eviction.
-            LOG_DEBUG("[LRU] Unpin Frame " << frame_id << " (Candidate for eviction)");
+            LOG_DEBUG_LRU("Unpin Frame " << frame_id << " (Candidate for eviction)");
 
             // New candidates are added to the FRONT (Most Recently Used position).
             // They will only move to the back (Victim position) as other pages are unpinned.

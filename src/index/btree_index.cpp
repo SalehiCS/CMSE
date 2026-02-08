@@ -33,7 +33,7 @@ namespace cmse::index
         int attempts = 0;
         const int MAX_ATTEMPTS = 5; // Prevent infinite loops in case of severe concurrent pressure
 
-        LOG_DEBUG("[BTree] Insert Start: Key=" << key);
+        
 
         while (attempts < MAX_ATTEMPTS) {
             // Case 1: The tree is completely empty.
@@ -48,7 +48,7 @@ namespace cmse::index
             PageGuard leaf_guard = FindLeaf(key, ctx, true); // ctx populates with the parent path
 
             if (!leaf_guard.IsValid()) {
-                LOG_DEBUG("[BTree] Insert Failed: Could not find leaf for Key=" << key);
+                
                 return false;
             }
 
@@ -61,7 +61,7 @@ namespace cmse::index
                 // This ensures the Pruning logic in Search/Scan remains accurate.
                 UpdateStatsUpwards(ctx, key);
 
-                LOG_DEBUG("[BTree] Insert Success: Key=" << key << " in Leaf=" << leaf_guard.Get()->GetPageId());
+                
 
                 // Mark page as modified so Buffer Pool flushes it to disk later.
                 leaf_guard.SetDirty(true);
@@ -168,7 +168,7 @@ namespace cmse::index
         PageGuard curr_guard = FindLeaf(start_key, ctx, false);
 
         if (!curr_guard.IsValid()) {
-            LOG_DEBUG("[BTree] FindLeaf Error: Invalid Root " << root_page_id_);
+            
             return results;
         }
 

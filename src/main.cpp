@@ -38,7 +38,7 @@ int main(int argc, char* argv[]) {
         if (std::cin >> choice) {
             int mask = 0;
             switch (choice) {
-            case 1: mask = LOG_ENGINE; break;
+            case 1: mask = LOG_LRU; break;
             case 2: mask = LOG_SPLIT; break;
             case 3: mask = LOG_BUFFER; break;
             case 4: mask = LOG_QUERY; break;

@@ -126,13 +126,13 @@ namespace cmse {
 
             if (static_cast<long>(offset) >= file_size) {
                 // Logic: If the page doesn't exist on disk yet, we return a zeroed-out page.
-                LOG_DEBUG("[Disk] ReadPage: ID=" << page_id << " (Past EOF, returning zero)");
+                
                 std::memset(data, 0, PAGE_SIZE);
                 return;
             }
 
             // Normal Execution: Seek to the offset and read one full PAGE_SIZE.
-            LOG_DEBUG("[Disk] ReadPage: ID=" << page_id);
+            
 
             fseek(db_file_, (long)offset, SEEK_SET);
             size_t read_count = fread(data, 1, PAGE_SIZE, db_file_);
@@ -151,7 +151,7 @@ namespace cmse {
             std::lock_guard<std::mutex> lock(db_io_latch_);
             size_t offset = static_cast<size_t>(page_id) * PAGE_SIZE;
 
-            LOG_DEBUG("[Disk] WritePage: ID=" << page_id << " Offset=" << offset);
+            
 
             // Jump to the specific page location.
             fseek(db_file_, (long)offset, SEEK_SET);
@@ -160,7 +160,7 @@ namespace cmse {
 
             if (written != PAGE_SIZE) {
                 // Critical error: Disk might be full or permissions changed.
-                std::cerr << "[Disk] FATAL WRITE ERROR on Page " << page_id << std::endl;
+                
             }
 
             // Note: We intentionally DO NOT call Sync/fflush here for high-throughput.
