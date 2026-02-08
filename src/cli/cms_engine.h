@@ -188,29 +188,36 @@ namespace cmse {
                 }
 
                 std::cout << "Executing..." << std::endl;
-                // Dispatch query to the execution engine
-                auto results = query_engine_->Execute(q);
-                std::cout << "[Results] Found " << results.size() << " records." << std::endl;
 
-                // --- PAGINATION INTERFACE ---
+                // 1. Get the Cursor (Instant)
+                auto cursor = query_engine_->Execute(q);
+
+                // 2. Iterate Lazily
                 size_t count = 0;
                 const size_t PAGE_SIZE = 20;
+                LogRecord r;
 
-                for (const auto& r : results) {
-                    std::cout << r.toString() << " | SRC:" << r.source << " | HOST:" << r.host
-                        << " | PRI:" << r.priority << std::endl;
+                // Fetch first record
+                while (cursor->Next(r)) {
+                    // Print Record
+                    std::cout << r.toString() << " | SRC:" << r.source
+                        << " | HOST:" << r.host << " | PRI:" << r.priority << std::endl;
 
                     count++;
-                    if (count % PAGE_SIZE == 0 && count < results.size()) {
-                        std::cout << "-- Press Enter for next 20, 'q' to stop listing --";
+
+                    // Pagination Logic
+                    if (count % PAGE_SIZE == 0) {
+                        std::cout << "-- Press Enter for next 20, 'q' to stop --";
                         char c = std::cin.get();
                         if (c == 'q') {
-                            // Clear stream if user quits pagination
-                            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                            // Clear buffer and stop
+                            if (std::cin.peek() != '\n') std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
                             break;
                         }
                     }
                 }
+
+                std::cout << "[Finished] Total displayed: " << count << std::endl;
             }
         }
 
