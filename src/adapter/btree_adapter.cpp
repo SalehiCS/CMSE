@@ -276,8 +276,8 @@ namespace cmse::adapter {
     */
     void BTreeAdapter::splitNode(Page* node_to_split, Page* new_right_page, SplitResult* out_result) {
 
-        // Log the event for debugging structural changes and page allocation.
-        LOG_DEBUG("[Adapter] Splitting Page " << node_to_split->GetPageId());
+        // Add this DEBUG block at the very beginning
+        LOG_DEBUG_SPLIT("[Adapter] Raw Split Request on Page " << node_to_split->GetPageId());
 
         // --- SAFETY GUARD: Ensure distinct physical pages ---
         // Critical: If the IDs match, the split would overwrite the same memory, causing data loss.
@@ -325,6 +325,10 @@ namespace cmse::adapter {
             // In a Leaf Split, the promoted key is a COPY of the sibling's first key.
             out_result->promoted_key = sibling->keys[0];
 
+            // After calculating promoted key:
+            LOG_DEBUG_SPLIT("[Adapter] Leaf Split Promoted Key: " << out_result->promoted_key);
+              
+             
             // Recalculate Min/Max/Density exactly for these modified leaves.
             updateStatistics(node_to_split);
             updateStatistics(new_right_page);
@@ -355,6 +359,9 @@ namespace cmse::adapter {
 
             // In an internal split, the middle key is PROMOTED out of the node completely.
             out_result->promoted_key = original->keys[split_index];
+
+            // After calculating promoted key:
+            LOG_DEBUG_SPLIT("[Adapter] Internal Split Promoted Key: " << out_result->promoted_key);
 
             int sibling_count = 0;
             // Move keys strictly AFTER the split_index to the sibling.

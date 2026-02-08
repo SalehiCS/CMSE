@@ -38,7 +38,7 @@ namespace cmse::index
         while (attempts < MAX_ATTEMPTS) {
             // Case 1: The tree is completely empty.
             if (root_page_id_ == INVALID_PAGE_ID) {
-                LOG_DEBUG("[BTree] Empty tree, starting new root for Key=" << key);
+                LOG_DEBUG_SPLIT("Empty tree, starting new root for Key=" << key);
                 StartNewTree(key, value); // Allocates first root page
                 return true;
             }
@@ -69,14 +69,14 @@ namespace cmse::index
             }
 
             // Case 4: The leaf is full. We must split it into two pages.
-            LOG_DEBUG("[BTree] Page Full, Handling Split on Leaf=" << leaf_guard.Get()->GetPageId());
+            LOG_DEBUG_SPLIT("Page Full, Handling Split on Leaf=" << leaf_guard.Get()->GetPageId());
 
             // Move leaf_guard into HandleSplit to pass ownership of the pin.
             HandleSplit(std::move(leaf_guard), ctx);
             attempts++; // Retry the insertion in the newly organized structure
         }
 
-        LOG_DEBUG("[BTree] Insert Failed: Max attempts reached for Key=" << key);
+        LOG_DEBUG_SPLIT("Insert Failed: Max attempts reached for Key=" << key);
         return false;
     }
 
@@ -319,128 +319,116 @@ namespace cmse::index
     }
 
     /**
-     * HandleSplit
-     * Manages node overflow by creating siblings and propagating the split upwards.
-     */
+         * HandleSplit
+         * Manages node overflow by creating siblings and propagating the split upwards.
+         */
     void BTreeIndex::HandleSplit(PageGuard node_guard, TraversalContext& ctx) {
 
         cmse::Page* current_node = node_guard.Get();
         page_id_t current_id = current_node->GetPageId();
 
-        // 1. Allocate a new sibling page to hold half of the overflowing data.
+        LOG_DEBUG_SPLIT("--- HandleSplit Start: Page " << current_id << " ---");
+
+        // 1. Allocate a new sibling page
         page_id_t sibling_id;
         PageGuard sibling_guard(bpm_, bpm_->NewPage(sibling_id));
-        if (!sibling_guard.IsValid()) return;
+        if (!sibling_guard.IsValid()) {
+            LOG_DEBUG_SPLIT("[Fatal] Failed to allocate sibling for Page " << current_id);
+            return;
+        }
 
-        // 2. Perform the physical split of data between the two pages.
+        // 2. Perform the physical split
         cmse::adapter::SplitResult result;
         adapter_.splitNode(current_node, sibling_guard.Get(), &result);
 
-        // The key that will move up to the parent.
+        // Data to propagate up
         KeyType key_to_insert = result.promoted_key;
-        // The pointer to the new sibling.
         page_id_t child_val_to_insert = sibling_id;
 
-        // Both nodes are now modified.
+        LOG_DEBUG_SPLIT("Split Page " << current_id << " -> Sibling " << sibling_id
+            << " | Promoted Key: " << key_to_insert);
+
+        // Commit changes to disk
         node_guard.SetDirty(true);
         sibling_guard.SetDirty(true);
-
-        // Explicitly drop guards to free pins; we only need the IDs and promoted key for the parent.
         node_guard.Drop();
         sibling_guard.Drop();
 
         // ==========================================================
-        // Iterative Upward Propagation: Climb the tree toward the root.
+        // Iterative Upward Propagation
         // ==========================================================
         while (true) {
 
-            // ---------------------------------------------------------
-            // CASE 1: The current split reached the Root level.
-            // Action: Create a new Root and increase tree height.
-            // ---------------------------------------------------------
+            // CASE 1: Root Split
             if (ctx.path_pages.empty()) {
                 page_id_t new_root_id;
                 PageGuard new_root_guard(bpm_, bpm_->NewPage(new_root_id));
                 if (!new_root_guard.IsValid()) return;
 
-                // Point new root to the two split halves.
                 adapter_.createNewRoot(new_root_guard.Get(), current_id, child_val_to_insert, key_to_insert);
 
-                // --- PHASE 3: EXACT STATISTICS RECALCULATION ---
-                // Fetch both children to aggregate their metadata (Total Keys, Min/Max).
-                {
-                    PageGuard left_child(bpm_, bpm_->FetchPage(current_id));
-                    PageGuard right_child(bpm_, bpm_->FetchPage(child_val_to_insert));
-
-                    if (left_child.IsValid() && right_child.IsValid()) {
-                        auto* root_h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(new_root_guard.Get()->GetData());
-                        auto* left_h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(left_child.Get()->GetData());
-                        auto* right_h = reinterpret_cast<cmse::adapter::BPlusNodeHeader*>(right_child.Get()->GetData());
-
-                        // Sum total records across the new split boundary.
-                        root_h->total_keys = left_h->total_keys + right_h->total_keys;
-
-                        // Root range covers the absolute min of left and absolute max of right.
-                        root_h->min_key = left_h->min_key;
-                        root_h->max_key = right_h->max_key;
-
-                        // Update distribution density for query optimizer.
-                        if (root_h->max_key >= root_h->min_key) {
-                            double range = (double)(root_h->max_key - root_h->min_key) + 1.0;
-                            root_h->density = (range > 0) ? (float)((double)root_h->total_keys / range) : 1.0f;
-                        }
-                        else {
-                            root_h->density = 0.0f;
-                        }
-                    }
-                }
-
                 new_root_guard.SetDirty(true);
-                this->root_page_id_ = new_root_id; // Finalize new root ID globally.
+                this->root_page_id_ = new_root_id;
+
+                LOG_DEBUG_SPLIT("ROOT SPLIT! New Root: " << new_root_id
+                    << " | Children: [" << current_id << ", " << child_val_to_insert << "]");
                 return;
             }
 
-            // ---------------------------------------------------------
-            // CASE 2: Parent page exists in the traversal stack.
-            // Action: Attempt to insert the promoted key into the parent.
-            // ---------------------------------------------------------
+            // CASE 2: Parent Exists
             PageGuard parent_guard = std::move(ctx.path_pages.back());
             ctx.path_pages.pop_back();
+            page_id_t parent_id = parent_guard.Get()->GetPageId();
 
-            // If parent has space, insert and stop.
+            LOG_DEBUG_SPLIT("Propagating to Parent " << parent_id
+                << " | Inserting Key: " << key_to_insert << " Child: " << child_val_to_insert);
+
+            // Attempt Insert into Parent
             if (adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert)) {
                 parent_guard.SetDirty(true);
-                return; // Upward propagation complete.
+                LOG_DEBUG_SPLIT("Insert into Parent " << parent_id << " SUCCESS.");
+                return;
             }
 
-            // ---------------------------------------------------------
-            // CASE 3: Parent is also full.
-            // Action: Split the parent Internal Node and keep climbing.
-            // ---------------------------------------------------------
+            // CASE 3: Parent Full (Recursive Split)
+            LOG_DEBUG_SPLIT("Parent " << parent_id << " FULL. Recursive Split Required.");
+
             page_id_t p_sibling_id;
             PageGuard p_sibling_guard(bpm_, bpm_->NewPage(p_sibling_id));
             if (!p_sibling_guard.IsValid()) return;
 
+            // Split the Parent
             cmse::adapter::SplitResult p_result;
             adapter_.splitNode(parent_guard.Get(), p_sibling_guard.Get(), &p_result);
 
-            // Determine which side of the split the pending key belongs to.
-            if (key_to_insert >= p_result.promoted_key) {
+            LOG_DEBUG_SPLIT("Parent Split: " << parent_id << " -> " << p_sibling_id
+                << " | New Separator: " << p_result.promoted_key);
+
+            // CRITICAL DECISION: Which parent half gets the pending key?
+            bool insert_right = (key_to_insert >= p_result.promoted_key);
+
+            if (insert_right) {
+                LOG_DEBUG_SPLIT("Decision: Pending Key " << key_to_insert
+                    << " >= Separator " << p_result.promoted_key
+                    << " -> Insert into RIGHT Sibling " << p_sibling_id);
+
                 adapter_.insertIntoInternal(p_sibling_guard.Get(), key_to_insert, child_val_to_insert);
             }
             else {
+                LOG_DEBUG_SPLIT("Decision: Pending Key " << key_to_insert
+                    << " < Separator " << p_result.promoted_key
+                    << " -> Insert into LEFT Parent " << parent_id);
+
                 adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert);
             }
 
-            // Prepare values for the next parent (Grandparent) in the loop.
-            current_id = parent_guard.Get()->GetPageId();
+            // Setup for Next Iteration (Grandparent)
+            current_id = parent_id;
             child_val_to_insert = p_sibling_id;
             key_to_insert = p_result.promoted_key;
 
             parent_guard.SetDirty(true);
             p_sibling_guard.SetDirty(true);
-
-            // Parent and sibling guards are destroyed here, unpinning pages.
         }
     }
 
