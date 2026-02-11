@@ -416,6 +416,8 @@ namespace cmse::adapter {
         root->header.key_count = 1;
         updateStatistics(new_root_page);
         syncPageHeader(new_root_page);
+
+        
     }
 
     // -------------------------------------------------------------------------

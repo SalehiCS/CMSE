@@ -7,6 +7,7 @@
 #include "buffer_pool_manager.h"
 #include <cstring>
 #include <iostream>
+#include <common/logger.h>
 
 namespace cmse {
     namespace bufferpool {
@@ -151,6 +152,7 @@ namespace cmse {
             // 2. Request a unique ID from the DiskManager's allocator.
             page_id = disk_manager_->AllocatePage();
 
+            LOG_DEBUG_BUFFER("[ALLOC] new page = " << page_id);
             // 3. Setup the physical Page object in the pre-allocated array.
             Page* page = &pages_[free_frame_id];
             page->ResetMemory(); // Clear any stale data from previous occupants.

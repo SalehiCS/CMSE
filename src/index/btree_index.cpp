@@ -301,7 +301,7 @@ namespace cmse::index
 
         LOG_DEBUG_SPLIT("--- HandleSplit Start: Page " << current_id << " ---");
 
-        // 1. Allocate a new sibling page
+        // 1. Allocate a new sibling page (LEAF or INTERNAL depending on current_node)
         page_id_t sibling_id;
         PageGuard sibling_guard(bpm_, bpm_->NewPage(sibling_id));
         if (!sibling_guard.IsValid()) {
@@ -310,19 +310,23 @@ namespace cmse::index
         }
 
         // 2. Perform the physical split
+        // Note: splitNode handles the "Next Leaf" pointer linking internally if it is a Leaf.
         cmse::adapter::SplitResult result;
         adapter_.splitNode(current_node, sibling_guard.Get(), &result);
 
-        // Data to propagate up
+        // Data to propagate up to the Parent
         KeyType key_to_insert = result.promoted_key;
         page_id_t child_val_to_insert = sibling_id;
 
         LOG_DEBUG_SPLIT("Split Page " << current_id << " -> Sibling " << sibling_id
             << " | Promoted Key: " << key_to_insert);
 
-        // Commit changes to disk
+        // Commit changes to disk for the children
         node_guard.SetDirty(true);
         sibling_guard.SetDirty(true);
+
+        // Explicitly drop guards to release pins before moving up.
+        // We only need the IDs (current_id, child_val_to_insert) now.
         node_guard.Drop();
         sibling_guard.Drop();
 
@@ -331,12 +335,13 @@ namespace cmse::index
         // ==========================================================
         while (true) {
 
-            // CASE 1: Root Split
+            // CASE 1: Root Split (We reached the top)
             if (ctx.path_pages.empty()) {
                 page_id_t new_root_id;
                 PageGuard new_root_guard(bpm_, bpm_->NewPage(new_root_id));
                 if (!new_root_guard.IsValid()) return;
 
+                // Create a new Root that points to [Left Child, Right Child]
                 adapter_.createNewRoot(new_root_guard.Get(), current_id, child_val_to_insert, key_to_insert);
 
                 new_root_guard.SetDirty(true);
@@ -344,6 +349,14 @@ namespace cmse::index
 
                 LOG_DEBUG_SPLIT("ROOT SPLIT! New Root: " << new_root_id
                     << " | Children: [" << current_id << ", " << child_val_to_insert << "]");
+
+                // =========================================================
+                // CRITICAL FIX: Update Persistent Header / Metadata
+                // =========================================================
+                // You need to call whatever function updates the global "Meta" page.
+                // Assuming you have a pointer to the Header Page or a method for this:
+
+                
                 return;
             }
 
@@ -355,7 +368,7 @@ namespace cmse::index
             LOG_DEBUG_SPLIT("Propagating to Parent " << parent_id
                 << " | Inserting Key: " << key_to_insert << " Child: " << child_val_to_insert);
 
-            // Attempt Insert into Parent
+            // Attempt Insert into Parent (if it has space)
             if (adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert)) {
                 parent_guard.SetDirty(true);
                 LOG_DEBUG_SPLIT("Insert into Parent " << parent_id << " SUCCESS.");
@@ -369,14 +382,17 @@ namespace cmse::index
             PageGuard p_sibling_guard(bpm_, bpm_->NewPage(p_sibling_id));
             if (!p_sibling_guard.IsValid()) return;
 
-            // Split the Parent
+            // Split the Parent Node
             cmse::adapter::SplitResult p_result;
             adapter_.splitNode(parent_guard.Get(), p_sibling_guard.Get(), &p_result);
 
             LOG_DEBUG_SPLIT("Parent Split: " << parent_id << " -> " << p_sibling_id
                 << " | New Separator: " << p_result.promoted_key);
 
-            // CRITICAL DECISION: Which parent half gets the pending key?
+            // CRITICAL DECISION: Where does the *pending* key/child go?
+            // The parent just split into [Left Parent] and [Right Sibling].
+            // Does the key coming from below belong in the Left or Right node?
+
             bool insert_right = (key_to_insert >= p_result.promoted_key);
 
             if (insert_right) {
@@ -394,7 +410,11 @@ namespace cmse::index
                 adapter_.insertIntoInternal(parent_guard.Get(), key_to_insert, child_val_to_insert);
             }
 
-            // Setup for Next Iteration (Grandparent)
+            // Prepare for the next iteration (Grandparent)
+            // The "current node" effectively becomes the old parent ID (though logically it's the split pair)
+            // The "child to insert" becomes the NEW Internal Sibling ID.
+            // The "key to insert" becomes the key promoted from the Parent Split.
+
             current_id = parent_id;
             child_val_to_insert = p_sibling_id;
             key_to_insert = p_result.promoted_key;
@@ -403,7 +423,6 @@ namespace cmse::index
             p_sibling_guard.SetDirty(true);
         }
     }
-
     // -------------------------------------------------------------------------
     // Phase 3: Visualization (Updated to show Metadata Stats)
     // -------------------------------------------------------------------------
@@ -796,8 +815,8 @@ namespace cmse::index
         page_id_t child_val_to_insert = sibling_id;
 
         // Release leaf pins; propagation now happens via the 'ancestors' stack.
-        node_guard.Drop();
-        sibling_guard.Drop();
+        //node_guard.Drop();
+        //sibling_guard.Drop();
 
         // D. Iterative Upward Propagation.
         while (true) {
