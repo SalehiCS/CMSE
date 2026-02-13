@@ -63,7 +63,8 @@ int main() {
 
     auto disk = std::make_unique<disk::DiskManager>(DB_FILE);
     // Initialize BPM with exactly 4 frames
-    auto bpm = std::make_unique<bufferpool::BufferPoolManager>(POOL_SIZE, disk.get());
+    auto bpm = std::make_unique<bufferpool::BufferPoolManager>(
+        , disk.get());
 
     std::vector<page_id_t> page_ids; // Keep track of created IDs
 

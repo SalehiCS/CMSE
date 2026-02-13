@@ -8,7 +8,7 @@
 #include <cstring>
 #include <iostream>
 #include <common/logger.h>
-
+#include "common/debug_watch.h"
 namespace cmse {
     namespace bufferpool {
 
@@ -59,7 +59,9 @@ namespace cmse {
             if (replacer_->Victim(frame_id)) {
                 // A victim frame was selected based on the LRU policy.
                 Page* victim_page = &pages_[*frame_id];
-
+                LOG_DEBUG_QUERY("VICTIM frame= " << *frame_id << " page = "
+                    << victim_page->GetPageId() << " page address = " << victim_page->GetData());
+        
                 // Check for "Dirty" status: If modified, we MUST write it to disk before evicting.
                 if (victim_page->is_dirty_) {
                     // ARCHITECTURAL NOTE: We use GetHeader() to ensure the full 4KB block 
@@ -73,6 +75,7 @@ namespace cmse {
 
                 // Prepare the frame memory for a new occupant.
                 victim_page->ResetMemory();
+                
                 victim_page->pin_count_ = 0;
                 victim_page->is_dirty_ = false;
 
@@ -95,6 +98,7 @@ namespace cmse {
             if (page_table_.find(page_id) != page_table_.end()) {
                 frame_id_t frame_id = page_table_[page_id];
                 Page* page = &pages_[frame_id];
+                WatchPage4036(page, "FetchPage");
 
                 // Increase the pin count so the replacer knows not to evict this page.
                 replacer_->Pin(frame_id);
@@ -155,6 +159,8 @@ namespace cmse {
             LOG_DEBUG_BUFFER("[ALLOC] new page = " << page_id);
             // 3. Setup the physical Page object in the pre-allocated array.
             Page* page = &pages_[free_frame_id];
+            WatchPage4036(page, "NewPage");
+
             page->ResetMemory(); // Clear any stale data from previous occupants.
 
             // Initialize the PageHeader metadata for a fresh node.
@@ -171,6 +177,12 @@ namespace cmse {
 
             // Notify the replacer that this frame is "Pinned" and ineligible for eviction.
             replacer_->Pin(free_frame_id);
+
+
+
+            LOG_DEBUG_QUERY("ALLOC frame= " << free_frame_id << " page = "
+                << page_id << " page address = " << &pages_[free_frame_id]);
+
 
             return page;
         }

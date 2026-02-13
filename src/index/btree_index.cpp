@@ -2,7 +2,7 @@
 #include "bufferpool/buffer_pool_manager.h"
 #include "page/page.h"
 #include "../common/logger.h"
-
+#include "../common/debug_watch.h"
 #include <functional>
 #include <iostream>
 #include <algorithm> 
@@ -51,7 +51,7 @@ namespace cmse::index
                 
                 return false;
             }
-
+            WatchPage4036(leaf_guard.Get(), "line53 btree index");
             // Case 3: Try to insert the key into the found leaf page.
             // applyUpdateToLeaf handles binary search and insertion within the page bytes.
             if (adapter_.applyUpdateToLeaf(leaf_guard.Get(), key, value)) {
@@ -237,6 +237,7 @@ namespace cmse::index
         adapter_.initLeaf(root_guard.Get());
 
         // Perform the initial key-value insertion.
+        WatchPage4036(root_guard.Get(), "line240 btree index");
         adapter_.applyUpdateToLeaf(root_guard.Get(), key, value);
 
         // Update the index metadata to point to this new root.
@@ -304,6 +305,11 @@ namespace cmse::index
         // 1. Allocate a new sibling page (LEAF or INTERNAL depending on current_node)
         page_id_t sibling_id;
         PageGuard sibling_guard(bpm_, bpm_->NewPage(sibling_id));
+        LOG_DEBUG_QUERY("NEW PAGE (handle split) id= " << sibling_id << " page = "
+            << sibling_guard.Get());
+        
+        
+        
         if (!sibling_guard.IsValid()) {
             LOG_DEBUG_SPLIT("[Fatal] Failed to allocate sibling for Page " << current_id);
             return;
@@ -312,6 +318,12 @@ namespace cmse::index
         // 2. Perform the physical split
         // Note: splitNode handles the "Next Leaf" pointer linking internally if it is a Leaf.
         cmse::adapter::SplitResult result;
+
+        LOG_DEBUG_QUERY("SPLIT CALL original= " << current_node << " sibling = "
+            << sibling_guard.Get());
+
+
+
         adapter_.splitNode(current_node, sibling_guard.Get(), &result);
 
         // Data to propagate up to the Parent
@@ -681,7 +693,7 @@ namespace cmse::index
         std::cout << "   [CoW] COPYING Page " << page_id << " -> " << new_id << std::endl;
 
         // Step C: Perform the physical copy of the 4KB block.
-        std::memcpy(new_guard.Get()->GetData(), old_guard.Get()->GetData(), PAGE_SIZE);
+        std::memcpy(new_guard.Get()->GetHeader(), old_guard.Get()->GetHeader(), PAGE_SIZE);
 
         // Step D: Mark the new page as modified.
         new_guard.SetDirty(true);
@@ -716,6 +728,7 @@ namespace cmse::index
             leaf->next_leaf_id = INVALID_PAGE_ID;
 
             // Perform the first insertion.
+            WatchPage4036(root_guard.Get(), "line720 btree index");
             adapter_.applyUpdateToLeaf(root_guard.Get(), key, value);
 
             // Track this page as new so it doesn't get shadowed again.
@@ -730,6 +743,8 @@ namespace cmse::index
 
         // Step A: Make a writable copy of the Root.
         PageGuard curr_guard = GetPageWritable(txn.pending_root_id, txn);
+        WatchPage4036(curr_guard.Get(), "InsertCoW entry");
+
         if (!curr_guard.IsValid()) return false;
 
         // Update the draft root ID (in case the root was just shadowed).
@@ -769,7 +784,7 @@ namespace cmse::index
             // Move the cursor to the shadowed child.
             curr_guard = std::move(child_guard);
         }
-
+        WatchPage4036(curr_guard.Get(), "line776 btree index");
         // --- 3. INSERT INTO SHADOWED LEAF ---
         if (adapter_.applyUpdateToLeaf(curr_guard.Get(), key, value)) {
             // Insertion successful without a split.
@@ -789,6 +804,7 @@ namespace cmse::index
     void BTreeIndex::HandleSplitCoW(PageGuard node_guard, std::vector<PageGuard>& ancestors,
         TransactionContext& txn,
         const KeyType& key, const ValueType& value) {
+        WatchPage4036(node_guard.Get(), "Split start");
 
         // A. Allocate the Sibling.
         page_id_t sibling_id;
@@ -802,12 +818,15 @@ namespace cmse::index
         cmse::adapter::SplitResult result;
         adapter_.splitNode(node_guard.Get(), sibling_guard.Get(), &result);
 
+
         // --- C. INSERT PENDING KEY ---
         // Decide where the original target key belongs post-split.
         if (key >= result.promoted_key) {
+            WatchPage4036(sibling_guard.Get(), "line814 btree index");
             adapter_.applyUpdateToLeaf(sibling_guard.Get(), key, value);
         }
         else {
+            WatchPage4036(node_guard.Get(), "line818 btree index");
             adapter_.applyUpdateToLeaf(node_guard.Get(), key, value);
         }
 

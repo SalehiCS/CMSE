@@ -22,7 +22,7 @@ void PrintHelp() {
  */
 int main(int argc, char* argv[]) {
     // 1. ARGUMENT PARSING
-    bool debug_mode = false;
+    bool debug_mode = true;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-g") {

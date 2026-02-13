@@ -6,6 +6,13 @@
 #include <sstream>
 #include <iomanip>
 #include <ctime>
+#include "../page/page.h"
+#include "../adapter/btree_adapter.h"
+
+
+
+
+
 
 // --- STEP 1: DEFINE LOG CHANNELS ---
 // Using powers of 2 for bitmasking allows combining multiple channels if needed.

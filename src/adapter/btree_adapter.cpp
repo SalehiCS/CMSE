@@ -3,7 +3,7 @@
 #include <cstring>
 #include <algorithm> // For std::upper_bound, std::copy, std::distance
 #include "../common/logger.h"
-
+#include "../common/debug_watch.h"
 
 namespace cmse::adapter {
 
@@ -183,6 +183,7 @@ namespace cmse::adapter {
      */
     bool BTreeAdapter::applyUpdateToLeaf(Page* leaf_page, const KeyType& key, const ValueType& val) {
         BPlusLeafNode* leaf = getLeafNode(leaf_page);
+        WatchPage4036(leaf_page, "applyUpdateToLeaf");
 
         if (leaf->header.key_count >= MAX_KEYS_LEAF) {
             return false; // Buffer full; overflow imminent
@@ -248,6 +249,7 @@ namespace cmse::adapter {
      */
     bool BTreeAdapter::insertIntoInternal(Page* internal_page, const KeyType& key, page_id_t right_child_id) {
         BPlusInternalNode* internal = getInternalNode(internal_page);
+        WatchPage4036(internal_page, "insertIntoInternal");
 
         if (internal->header.key_count >= MAX_KEYS_INTERNAL) {
             return false; // Parent itself must split
@@ -285,6 +287,8 @@ namespace cmse::adapter {
     // PARANOID SPLIT NODE (With Corruption Detection & Duplicate Support)
     // =========================================================================
     void BTreeAdapter::splitNode(Page* node_to_split, Page* new_right_page, SplitResult* out_result) {
+        WatchPage4036(node_to_split, "splitNode original");
+        WatchPage4036(new_right_page, "splitNode sibling");
 
         page_id_t orig_id = node_to_split->GetPageId();
         page_id_t sib_id = new_right_page->GetPageId();

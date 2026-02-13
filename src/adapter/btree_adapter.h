@@ -9,6 +9,7 @@
 #include <cstring>
 // Standard algorithms for binary searches and sorting within nodes.
 #include <algorithm>
+#include "../common/logger.h"
 
 namespace cmse::adapter {
 
@@ -142,6 +143,13 @@ namespace cmse::adapter {
          * type and count information for logging and debugging.
          */
         void syncPageHeader(Page* page) {
+            auto* hdr = reinterpret_cast<BPlusNodeHeader*>(page->GetData());
+
+            if (page->GetPageId() == 4036 && !hdr->is_leaf) {
+                std::cout << "[CORRUPTION WRITER FOUND] syncPageHeader wrote INTERNAL into 4036";
+                abort();
+            }
+
             BPlusNodeHeader* internal_h = getHeader(page);
             PageHeader* external_h = page->GetHeader();
 

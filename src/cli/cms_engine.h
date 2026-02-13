@@ -108,6 +108,9 @@ namespace cmse {
 
                     records_since_commit++;
                     total_imported++;
+                    if (rec.timestamp % 1000 == 0)
+                        LOG_DEBUG_QUERY("[LOAD PROGRESS] ts=" << rec.timestamp);
+
                 }
 
                 // --- ATOMIC COMMIT CHECK ---
